@@ -1,0 +1,3 @@
+local _, GUF = ...
+-- Brighter compact crossed swords; the approved moon and existing socket geometry stay unchanged.
+GUF.indicatorArtwork.combat = { path = "Interface\\AddOns\\GoodUnitFrames\\media\\indicators\\combat-v3-", left = 0.0454545455, right = 0.9545454545, top = 0.0566188198, bottom = 0.9290271132, aspect = 1.042047532, span = 0.9090909091, socketFit = { x = 0.499142659, y = 0.5003434447, radius = 0.6090889572 } }

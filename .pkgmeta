@@ -1,0 +1,14 @@
+package-as: GoodUnitFrames
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - README.md
+  - .github
+  - .gitignore
+  - AGENTS.md
+  - DESIGN.md
+  - TODO.md
+  - concept-art

@@ -1,0 +1,3 @@
+local _, GUF = ...
+-- Generic sleeping moon/zzz; alpha-measured circular fit shared by every class.
+GUF.indicatorArtwork.resting = { path = "Interface\\AddOns\\GoodUnitFrames\\media\\indicators\\resting-v2-", left = 0.0829346093, right = 0.9633173844, top = 0.0901116427, bottom = 0.9290271132, aspect = 1.0494296578, span = 0.8803827751, socketFit = { x = 0.4622272469, y = 0.5133696345, radius = 0.5474593745 } }

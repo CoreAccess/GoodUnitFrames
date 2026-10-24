@@ -1,0 +1,42 @@
+# Original artwork backups and local design references; never ship these.
+/concept-art/
+/AGENTS.md
+/DESIGN.md
+/TODO.md
+.guf-rollbacks/
+/backups/
+.guf-artwork-*-review.png
+
+# Generated release packages and build output.
+/dist/
+/build/
+*.zip
+*.7z
+*.rar
+
+# Local account data, if accidentally copied into the project.
+/WTF/
+/SavedVariables/
+
+# Editor settings, temporary files, logs and patch leftovers.
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.log
+__pycache__/
+*.py[cod]
+
+# Operating system metadata.
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Runtime code, libraries, the TOC and media (including BLP/TGA) stay trackable.

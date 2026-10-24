@@ -1,0 +1,3 @@
+local _, GUF = ...
+-- Artwork retired; initialize the catalog before retained Groveheart loads.
+GUF.portraitDesigns = GUF.portraitDesigns or {}
