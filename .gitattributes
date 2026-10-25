@@ -1,0 +1,18 @@
+# Keep GitHub documentation and packaging metadata out of source archives.
+/README.md export-ignore
+/.github export-ignore
+/.github/** export-ignore
+/.gitignore export-ignore
+/.pkgmeta export-ignore
+/.gitattributes export-ignore
+
+# Local guidance and generated output remain excluded if ever tracked.
+/AGENTS.md export-ignore
+/DESIGN.md export-ignore
+/TODO.md export-ignore
+/concept-art export-ignore
+/concept-art/** export-ignore
+/dist export-ignore
+/dist/** export-ignore
+/build export-ignore
+/build/** export-ignore
