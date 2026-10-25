@@ -6,6 +6,11 @@
 /.pkgmeta export-ignore
 /.gitattributes export-ignore
 
+.gitattributes
+.gitignore
+.pkgmeta
+README.md
+
 # Local guidance and generated output remain excluded if ever tracked.
 /AGENTS.md export-ignore
 /DESIGN.md export-ignore
