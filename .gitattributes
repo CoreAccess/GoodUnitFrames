@@ -10,6 +10,7 @@
 .gitignore
 .pkgmeta
 README.md
+.github/
 
 # Local guidance and generated output remain excluded if ever tracked.
 /AGENTS.md export-ignore
