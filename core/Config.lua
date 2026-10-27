@@ -4,12 +4,10 @@ _G.GoodUnitFrames = GUF
 GUF.name = addonName
 GUF.title = "Good Unit Frames"
 GUF.version = "0.2.0"
--- Forever also reports Mainline. Use its public interface band first; folder
--- names and Mainline alone cannot distinguish these two supported clients.
-GUF.clientInterface = select(4, GetBuildInfo())
-GUF.isForever = type(GUF.clientInterface) == "number" and GUF.clientInterface >= 16000 and GUF.clientInterface < 17000
-GUF.isRetail = not GUF.isForever and WOW_PROJECT_MAINLINE ~= nil and WOW_PROJECT_ID == WOW_PROJECT_MAINLINE
-    and type(GUF.clientInterface) == "number" and GUF.clientInterface >= 100000
+-- Transitional aliases keep existing features on the extracted client rules.
+GUF.clientInterface = GUF.Client.interface
+GUF.isForever = GUF.Client.isForever
+GUF.isRetail = GUF.Client.isRetail
 GUF.order = { "player", "target" }
 -- Keep dormant configuration defaults for future support; only order is live.
 local storedUnitOrder = { "player", "target", "targettarget", "pet" }
@@ -18,16 +16,10 @@ GUF.frames = {}
 function GUF.IsManagedUnit(unit)
     return not GUF.Secret(unit) and (unit == "player" or unit == "target")
 end
-GUF.frameStyles = {
-    { "blizzard", "Blizzard Layout" },
-    { "artistic", "Artistic Layout" },
-}
-
 function GUF.CanResizeFrames()
-    for _, style in ipairs(GUF.frameStyles) do
-        if style[1] == GUF.db.general.frameStyle then return not style.disabled and style.allowSize == true end
-    end
-    return false
+    local style = GUF.db.general.frameStyle
+    local definition = GUF.Layouts.Get(style)
+    return definition ~= nil and GUF.Layouts.IsAvailable(style) and definition.allowSize
 end
 
 -- Fallback class palette; prefer the client's class-color API when available.
@@ -63,9 +55,7 @@ function GUF.Copy(value)
     return copy
 end
 
-function GUF.Secret(value)
-    return issecretvalue and issecretvalue(value) or false
-end
+GUF.Secret = GUF.Client.IsSecret
 
 -- A nil result means restricted geometry, not an anchorless region.
 function GUF.ReadPoints(region)
@@ -80,10 +70,7 @@ function GUF.ReadPoints(region)
     return points
 end
 
-function GUF.Restricted()
-    return InCombatLockdown() or (C_Secrets and C_Secrets.ShouldAurasBeSecret
-        and C_Secrets.ShouldAurasBeSecret()) or false
-end
+GUF.Restricted = GUF.Client.StructuralChangesRestricted
 
 function GUF.Print(message)
     DEFAULT_CHAT_FRAME:AddMessage("|cff73cfff" .. GUF.title .. ":|r " .. message)
@@ -409,164 +396,10 @@ end
 GUF.NormalizeTextEditors(GUF.defaults.frames)
 GUF.NormalizeTextEditors(GUF.artisticLayoutDefaults.frames)
 
-local function merge(target, defaults)
-    for key, value in pairs(defaults) do
-        if type(value) == "table" then
-            -- A composition is an ordered list, including intentionally empty
-            -- lists. Never merge default pieces into a user's shorter format.
-            if key == "parts" then
-                if type(target[key]) ~= "table" then target[key] = GUF.Copy(value) end
-            else
-                if type(target[key]) ~= "table" then target[key] = {} end
-                merge(target[key], value)
-            end
-        elseif type(target[key]) ~= type(value) then target[key] = value end
-    end
-end
-
 function GUF.InitializeDB()
-    -- Only the selected account profile is normalized; no character storage is read.
-    local database = GUF.AttachProfile()
-    local version = tonumber(database.version) or 0
-    if version < 2 then
-        -- Update previous default geometry while retaining customized settings.
-        local threat = database.threat
-        if type(threat) == "table" then
-            if threat.width == 100 then threat.width = GUF.defaults.threat.width end
-            if threat.y == 6 then threat.y = GUF.defaults.threat.y end
-        end
-        database.version = 2
-    end
-    if version < 3 then
-        -- Align the badge with the name background; preserve custom offsets.
-        local threat = database.threat
-        if type(threat) == "table" and threat.y == 2 then threat.y = GUF.defaults.threat.y end
-        database.version = 3
-    end
-    -- Seed new independent formats from the character's existing abbreviation preference.
-    for _, cfg in pairs(database.frames or {}) do
-        if not cfg.combatText then
-            local feedback = cfg.indicators and cfg.indicators.feedback
-            cfg.combatText = { enabled = false, point = "CENTER",
-                x = feedback and feedback.x or 0, y = feedback and feedback.y or 0 }
-        end
-        if not cfg.text then
-            cfg.text = GUF.Copy(GUF.defaults.frames.player.text)
-            cfg.text.health.abbreviate = cfg.abbreviate ~= false
-            cfg.text.power.abbreviate = cfg.abbreviate ~= false
-        end
-    end
-    for _, cfg in pairs(database.frames or {}) do GUF.MigrateAuras(cfg.auras) end
-    if version < 11 and type(database.hideBlizzard) ~= "table" then
-        -- Preserve the previous effective Player replacement preference.
-        local player = database.frames and database.frames.player
-        local auras = player and player.auras
-        local buffs, debuffs = false, false
-        if player and auras and auras.replaceDefault ~= false then
-            for _, cfg in ipairs(auras.buffs or {}) do if cfg.enabled then buffs = true; break end end
-            for _, cfg in ipairs(auras.debuffs or {}) do if cfg.enabled then debuffs = true; break end end
-        end
-        database.hideBlizzard = { buffs = buffs and debuffs, debuffs = buffs and debuffs }
-    end
-    -- Seed from existing formats BEFORE merge; new defaults must not replace custom text.
-    for unit, cfg in pairs(database.frames or {}) do
-        if cfg.text then
-            local automatic = unit == "player" and cfg.healthText == "currentmax" and cfg.powerText == "currentmax"
-                and cfg.text.health and not cfg.text.health.split and cfg.text.health.abbreviate ~= false
-                and cfg.text.power and not cfg.text.power.split
-            for _, kind in ipairs({ "health", "power" }) do
-                if cfg.text[kind] then
-                    GUF.SeedTextFields(cfg, kind, automatic)
-                    if cfg.text[kind].fieldLayout == nil then
-                        cfg.text[kind].fieldLayout = unit == "player" and (automatic or cfg[kind .. "Text"] ~= "blizzard")
-                    end
-                end
-            end
-        end
-    end
-    GUF.NormalizeThreatText(database.frames, database.threat, database.general and database.general.frameStyle)
-    merge(database, GUF.defaults)
-    GUF.NormalizeResourceIndicators(database.frames)
-    GUF.NormalizeNameText(database.frames)
-    GUF.NormalizeThreatText(database.frames, database.threat, database.general.frameStyle)
-    GUF.NormalizeRankText(database.frames)
-    GUF.NormalizeFrameScales(database.frames, database.general.frameStyle)
-    GUF.NormalizeDesignSettings(database.frames)
-    GUF.NormalizeTextEditors(database.frames)
-    GUF.NormalizeAuraOptions(database.frames)
-    GUF.db = database
-    for _, unit in ipairs(GUF.order) do
-        local bars = GUF.db.frames[unit].bars
-        if bars.width < 0 then
-            local width = GUF.ArtisticLegacyBarSize(unit, "health")
-            -- Accommodate interim separate-width fields without retaining two owners.
-            if type(bars.healthSize.width) == "number" and bars.healthSize.width >= 0 then width = bars.healthSize.width end
-            bars.width = width
-        end
-        bars.healthSize.width, bars.powerSize.width = nil, nil
-    end
-    if version < 12 then
-        -- Preserve the current Artistic live-bar sizes when moving controls out of Frame.
-        -- Keep old frame dimensions stored for other layouts and legacy fallback.
-        for _, unit in ipairs(GUF.order) do
-            for _, kind in ipairs({ "health", "power" }) do
-                local _, height = GUF.ArtisticLegacyBarSize(unit, kind)
-                local settings = GUF.db.frames[unit].bars[kind .. "Size"]
-                if settings.height < 0 then settings.height = height end
-            end
-        end
-    end
-    -- Unimplemented layouts cannot be activated through older or manually edited saved settings.
-    local availableStyle = false
-    for _, style in ipairs(GUF.frameStyles) do
-        if style[1] == database.general.frameStyle and not style.disabled then availableStyle = true; break end
-    end
-    if not availableStyle then database.general.frameStyle = GUF.defaults.general.frameStyle end
-    for _, unit in ipairs(GUF.order) do
-        local cfg = database.frames[unit]
-        -- Retire the experimental 50-200% range when loading/selecting profiles.
-        cfg.artistic.portraitScale = math.max(1, math.min(1.5, cfg.artistic.portraitScale))
-        if unit ~= "target" then cfg.auras.replaceDefault = nil end
-        if unit == "pet" then cfg.nameDisplay = nil
-        elseif cfg.nameDisplay ~= "first" and cfg.nameDisplay ~= "last" and cfg.nameDisplay ~= "full" then cfg.nameDisplay = "full" end
-        if version < 4 then
-            -- Preserve the old effective fading percentages when retiring normal opacity.
-            local alpha = type(cfg.alpha) == "number" and cfg.alpha or 1
-            cfg.fading.combat = math.max(0, math.min(1, cfg.fading.combat * alpha))
-            cfg.fading.inactive = math.max(0, math.min(1, cfg.fading.inactive * alpha))
-        end
-        if cfg.healthColor == "gradient" then cfg.healthColor = "percent"
-        elseif cfg.healthColor == "custom" then cfg.healthColor = "static"
-        elseif cfg.healthColor ~= "class" and cfg.healthColor ~= "percent" and cfg.healthColor ~= "static" and cfg.healthColor ~= "blizzard" then
-            cfg.healthColor = "class"
-        end
-        if cfg.bars.powerMode ~= "class" and cfg.bars.powerMode ~= "blizzard" then cfg.bars.powerMode = "type" end
-        for _, key in ipairs({ "incAbsorb", "incHeal", "healAbsorb" }) do
-            local prediction = cfg.bars[key]
-            -- Prediction artwork always inherits the visible Health bar.
-            prediction.texture = nil
-            prediction.opacity = math.max(0, math.min(1, prediction.opacity))
-            -- Placement follows the effect's meaning; retain enablement and appearance choices.
-            prediction.display = nil
-            prediction.anchorMode, prediction.frameEdge, prediction.cap = nil, nil, nil
-            prediction.barSize, prediction.barAlign = nil, nil
-            if key ~= "incAbsorb" then prediction.showAtFullHealth = nil end
-        end
-        cfg.powerColor, cfg.hide.power = nil, nil
-        cfg.bars.customPower, cfg.bars.healthBackground, cfg.bars.powerBackground = nil, nil, nil
-        cfg.bars.healthBackgroundColor, cfg.bars.powerBackgroundColor, cfg.bars.backgroundAlpha = nil, nil, nil
-        cfg.alpha = nil
-        cfg.artwork = nil
-        cfg.hide.feedback = nil
-        cfg.indicators.feedback.x, cfg.indicators.feedback.y = nil, nil
-        cfg.hide.portrait, cfg.hide.name, cfg.hide.border = nil, nil, nil
-        cfg.fading.duration, cfg.fading.mouseover, cfg.fading.delay = nil, nil, nil
-    end
-    database.version = 13
-    database.general.globalUnits = nil
-    -- Remove the retired auto-open preference from existing character settings.
-    database.editMode = nil
-    GUF.db = database
+    -- Attach prepares every named profile and supported saved layout through
+    -- the settings service before exposing the selected account profile.
+    GUF.db = GUF.AttachProfile()
 end
 
 function GUF.ParseSpellIDs(text)
@@ -591,21 +424,79 @@ function GUF.Font(name)
     return STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 end
 
-function GUF.RequestApply()
+local function requestApply(retry, change, source)
+    local transitions = GUF.LayoutTransitions
+    local request = transitions.Request(GUF.db, GUF.GetRequestedLayout() or GUF.db.general.frameStyle, retry, change, source)
+    -- Root opacity remains safely updateable during combat/Edit Mode. Bind its
+    -- active-layout settings explicitly before deferring structural work.
+    if not GUF.ApplyFadingRequest(request) then GUF.QueueRecovery("request-fading"); return end
+    if not GUF.Runtime.ApplyColors(request) then GUF.QueueRecovery("request-colors"); return end
+    GUF.BindBlizzardEndCaps(request)
+    if change and not retry then
+        if GUF.updateQueued then GUF.Updates.stats.coalesced = GUF.Updates.stats.coalesced + 1 end
+        GUF.Updates.stats.queued = GUF.Updates.stats.queued + 1
+        GUF.updateQueued = request
+        return
+    end
+    GUF.updateQueued = nil
+    local targeted, fullReason = GUF.Updates.CanApply(request)
     if GUF.editing or GUF.Restricted() or not GUF.SyncEditModePositions() then
         -- End caps are decorative textures; their visibility also applies in Edit Mode.
         GUF.ApplyBlizzardEndCaps()
-        GUF.pending = true
+        GUF.QueueRecovery("structural-gate")
+        transitions.Defer(request, "structural-gate")
         return
     end
+    if retry and GUF.Updates.CanRetryCleanup(request) then
+        GUF.Updates.RetryCleanup(request)
+        return
+    end
+    local layoutChanged, layoutStatus = GUF.CommitLayoutRequest()
+    if layoutStatus == "deferred" then
+        GUF.QueueRecovery("layout-commit")
+        transitions.Defer(request, "layout-commit")
+        return
+    end
+    -- A discarded/revalidated selection may differ from the queued intent.
+    request = transitions.Request(GUF.db, GUF.db.general.frameStyle, true, nil, request.source)
+    GUF.BindBlizzardEndCaps(request)
+    request.phase, request.reason = "applying", nil
+    GUF.Updates.TakeRecovery(request)
     GUF.pending = nil
-    GUF.ApplyFrames()
-    GUF.ApplyAuras()
-    GUF.ApplyBlizzardFrames()
-    GUF.ApplyThreat()
-    if GUF.RefreshConfigurationMode then GUF.RefreshConfigurationMode() end
+    if not GUF.Runtime.Capture(request) then GUF.QueueRecovery("request-capture"); return end
+    if targeted and not layoutChanged then
+        if not GUF.Updates.Apply(request) then
+            request.updates.full, request.updates.fullReason = true, "targeted-incomplete"
+            GUF.QueueRecovery("targeted-incomplete")
+            return
+        end
+        if transitions.FinishRequest(request) and request.phase == "ready" then GUF.Runtime.Commit(request) end
+        return
+    end
+    request.updates.full = true
+    local reason = layoutChanged and "layout-commit" or fullReason or "unclassified"
+    request.updates.fullReason = request.updates.fullReason or reason
+    GUF.Updates.RecordFull(request, reason)
+    local framesReady = GUF.ApplyFrames(request)
+    if not transitions.IsCurrent(request, GUF.db.general.frameStyle) then GUF.QueueRecovery("request-superseded"); return end
+    if framesReady then
+        for _, item in ipairs({ { "auras", GUF.ApplyAuras }, { "visibility", GUF.ApplyBlizzardFrames },
+            { "threat", GUF.ApplyThreat } }) do
+            if not GUF.Runtime.Apply(nil, item[1], request, item[2]) then break end
+            if not transitions.IsCurrent(request, GUF.db.general.frameStyle) then GUF.QueueRecovery("request-superseded"); return end
+        end
+    end
+    if not transitions.FinishRequest(request) then GUF.QueueRecovery("request-incomplete"); return end
+    if request.phase == "ready" then GUF.Runtime.Commit(request)
+    else GUF.Updates.ParkCleanup(request) end
+    local refreshOptions = layoutChanged or layoutStatus == "discarded"
     if GUF.editPositionRefresh then
         GUF.editPositionRefresh = nil
-        if GUF.options and GUF.options:IsShown() and GUF.options.page == "units" and GUF.options.tab == "frame" then GUF.BuildOptions() end
+        if GUF.options and GUF.options.page == "units" and GUF.options.tab == "frame" then refreshOptions = true end
     end
+    if refreshOptions and GUF.options and GUF.options:IsShown() then GUF.BuildOptions() end
+end
+
+function GUF.RequestApply(retry, change, source)
+    return GUF.Runtime.Request(requestApply, retry, change, source)
 end

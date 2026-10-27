@@ -1,4 +1,8 @@
 local _, GUF = ...
+
+local function leaseAlpha(region, value, relative)
+    return GUF.RegionAlpha(region, value, relative, "Fonts")
+end
 local unpack = unpack or table.unpack
 
 function GUF.UnitNamePart(name, mode)
@@ -43,7 +47,7 @@ end
 
 function GUF.UpdateUnitName(entry)
     if not entry.name or entry.nameWriting then return end
-    local cfg = GUF.db.frames[entry.unit]
+    local cfg = GUF.Runtime.Settings("text", entry).frames[entry.unit]
     local name, playerTarget
     if entry.unit == "target" then name, playerTarget = targetPlayerDisplayName(entry, cfg.nameDisplay) end
     if entry.unit == "pet" or (cfg.nameDisplay == "full" and not playerTarget)
@@ -68,13 +72,12 @@ function GUF.UpdateUnitName(entry)
 end
 
 local function playerNameStrip(entry)
-    if entry.artisticLayout and entry.artisticLayout.active then return entry.artisticLayout.nameArea end
-    return entry.nameBackground or (entry.healthArea ~= entry.main and entry.healthArea) or entry.health
+    return GUF.Presentation.Role(entry, "name") or entry.health
 end
 
 local function playerNameWidth(entry, text, original, enabled)
     if entry.unit ~= "player" or text ~= entry.name or GUF.editing then return end
-    if GUF.Restricted() then GUF.pending = true; return end
+    if GUF.Restricted() then GUF.DeferRuntime("native-readiness"); return end
     if not enabled then
         if original.widthOwned then text:SetWidth(original.width); original.widthOwned = nil end
         return
@@ -83,23 +86,23 @@ local function playerNameWidth(entry, text, original, enabled)
     if not strip then return end
     if GUF.Secret(original.width) or original.width == nil then original.width = text:GetWidth() end
     local width = strip:GetWidth()
-    local artistic = entry.artisticLayout
+    local nameWidth = GUF.Presentation.Role(entry, "nameWidth")
     local inset = 3 * (entry.sizeOwned and entry.sizeX or 1)
-    if artistic and artistic.active then width, inset = artistic.nameTextWidth, 0 end
+    if nameWidth then width, inset = nameWidth, 0 end
     if GUF.Secret(original.width) or GUF.Secret(width) or type(width) ~= "number" or width <= 0 then
-        GUF.pending = true
+        GUF.DeferRuntime("native-readiness")
         return
     end
     -- Artistic excludes the hidden portrait underlap from its readable name span.
     -- Other styles use the name strip/health area as their horizontal span.
-    text:SetWidth(math.max(1, width - inset * 2))
     original.widthOwned = true
+    text:SetWidth(math.max(1, width - inset * 2))
 end
 
 function GUF.StyleText(entry, text, kind, enabled)
     if not text or not text.GetFont then return end
-    enabled = enabled and not GUF.db.frames[entry.unit].text[kind].nativeStyle
-    if enabled and (GUF.editing or GUF.Restricted()) then GUF.pending = true; return end
+    enabled = enabled and not GUF.Runtime.Settings("text", entry).frames[entry.unit].text[kind].nativeStyle
+    if enabled and (GUF.editing or GUF.Restricted()) then GUF.DeferRuntime("native-readiness"); return end
     entry.textOriginals = entry.textOriginals or {}
     local original = entry.textOriginals[text]
     if not original then
@@ -108,33 +111,36 @@ function GUF.StyleText(entry, text, kind, enabled)
             shadowOffset = { text:GetShadowOffset() }, color = { text:GetTextColor() },
             height = text:GetHeight(), justify = text:GetJustifyH() }
         entry.textOriginals[text] = original
+        GUF.NativeProperties.Track(text, "fontStyle", entry, original)
+    end
+    if not original.hooked then
         if kind == "name" and entry.unit == "player" then
             original.width = text:GetWidth()
             local function refreshWidth()
                 if original.writing or entry.sizeWriting then return end
                 original.writing = true
-                playerNameWidth(entry, text, original, not GUF.db.frames.player.text.name.nativeStyle)
+                playerNameWidth(entry, text, original, not GUF.Runtime.Settings("text", "player").frames.player.text.name.nativeStyle)
                 original.writing = nil
             end
             -- Keep the latest native width for restoration without capturing our own writes.
-            hooksecurefunc(text, "SetWidth", function(_, width)
+            GUF.NativeProperties.Hook("Fonts:1", text, "SetWidth", function(_, width)
                 if original.writing then return end
-                if GUF.Secret(width) then GUF.pending = true; return end
+                if GUF.Secret(width) then GUF.DeferRuntime("native-readiness"); return end
                 original.width = width
                 refreshWidth()
             end)
-            hooksecurefunc(text, "SetSize", function(_, width)
+            GUF.NativeProperties.Hook("Fonts:2", text, "SetSize", function(_, width)
                 if original.writing then return end
-                if GUF.Secret(width) then GUF.pending = true; return end
+                if GUF.Secret(width) then GUF.DeferRuntime("native-readiness"); return end
                 original.width = width
                 refreshWidth()
             end)
             local strip = playerNameStrip(entry)
             if strip then
-                if strip.HookScript then strip:HookScript("OnSizeChanged", refreshWidth)
+                if strip.HookScript then GUF.NativeProperties.HookScript("Fonts:script:1", strip, "OnSizeChanged", refreshWidth)
                 else
-                    hooksecurefunc(strip, "SetWidth", refreshWidth)
-                    hooksecurefunc(strip, "SetSize", refreshWidth)
+                    GUF.NativeProperties.Hook("Fonts:3", strip, "SetWidth", refreshWidth)
+                    GUF.NativeProperties.Hook("Fonts:4", strip, "SetSize", refreshWidth)
                 end
             end
         end
@@ -151,14 +157,14 @@ function GUF.StyleText(entry, text, kind, enabled)
             { "SetShadowOffset", "GetShadowOffset", "shadowOffset" },
         }) do
             local setter, getter, key = property[1], property[2], property[3]
-            hooksecurefunc(text, setter, function()
+            GUF.NativeProperties.Hook("Fonts:5", text, setter, function()
                 if nativeStyleWrite() then return end
                 original[key] = { text[getter](text) }
                 if kind == "name" and setter == "SetFont" then original.fontObject = nil end
                 GUF.StyleText(entry, text, kind, true)
             end)
         end
-        hooksecurefunc(text, "SetFontObject", function()
+        GUF.NativeProperties.Hook("Fonts:6", text, "SetFontObject", function()
             if nativeStyleWrite() then return end
             original.font = { text:GetFont() }
             if kind == "name" then original.fontObject = text:GetFontObject() end
@@ -171,7 +177,7 @@ function GUF.StyleText(entry, text, kind, enabled)
             GUF.StyleText(entry, text, kind, true)
         end)
         if kind == "name" then
-            hooksecurefunc(text, "SetJustifyH", function()
+            GUF.NativeProperties.Hook("Fonts:7", text, "SetJustifyH", function()
                 -- Skin placement/restoration must not become the native baseline.
                 if nativeStyleWrite() or entry.layoutWriting or entry.sizeWriting or GUF.geometryWriting then return end
                 original.justify = text:GetJustifyH()
@@ -180,22 +186,23 @@ function GUF.StyleText(entry, text, kind, enabled)
             end)
         end
         if kind ~= "name" then
-            hooksecurefunc(text, "SetTextColor", function()
+            GUF.NativeProperties.Hook("Fonts:8", text, "SetTextColor", function()
                 if original.writing then return end
                 original.color = { text:GetTextColor() }
-                local cfg = GUF.db.frames[entry.unit]
+                local cfg = GUF.Runtime.Settings("text", entry).frames[entry.unit]
                 if kind == "health" or kind == "power" or cfg.text[kind].customColor then
                     GUF.StyleText(entry, text, kind, true)
                 end
             end)
         end
+        original.hooked = true
     end
     original.writing = true
-    local cfg, options = GUF.db.frames[entry.unit], GUF.db.frames[entry.unit].text[kind]
+    local cfg, options = GUF.Runtime.Settings("text", entry).frames[entry.unit], GUF.Runtime.Settings("text", entry).frames[entry.unit].text[kind]
     if kind == "health" then GUF.LayerHealthText(entry, text) end
     if enabled then
-        local size = options.custom and options.size or kind == "name" and cfg.nameSize or cfg.fontSize
-        if kind == "level" and GUF.db.general.frameStyle ~= "blizzard" then size = size * cfg.indicators.level.scale end
+        original.owned = true
+        local size = GUF.PresentationTextSize(cfg, kind, GUF.Runtime.Settings("text", entry).general.frameStyle)
         local nameColoring = entry.nameColoring
         if kind == "name" then entry.nameColoring = true end
         GUF.StylePresentationText(text, cfg, options, size)
@@ -204,12 +211,12 @@ function GUF.StyleText(entry, text, kind, enabled)
         -- Native text can inherit secret geometry from its health/power bar, even at login.
         -- Leave that height under Blizzard's control instead of using it in arithmetic.
         if not GUF.Secret(original.height) then
-            text:SetHeight(math.max(original.height, size + 4))
             original.heightOwned = true
+            text:SetHeight(math.max(original.height, size + 4))
         end
         if kind == "health" or kind == "power" or options.customColor then
-            text:SetTextColor(unpack(options.color))
             original.colorOwned = true
+            text:SetTextColor(unpack(options.color))
         elseif original.colorOwned then
             text:SetTextColor(unpack(original.color))
             original.colorOwned = nil
@@ -254,7 +261,6 @@ end
 
 function GUF.CaptureText(entry)
     if entry.textCaptured then return end
-    entry.textCaptured = true
     if entry.name then GUF.StyleText(entry, entry.name, "name", false) end
     for _, region in pairs(entry.regions.level) do
         if region.GetFont then GUF.StyleText(entry, region, "level", false) end
@@ -265,10 +271,11 @@ function GUF.CaptureText(entry)
             for _, text in pairs(GUF.NativeTexts(entry, kind)) do GUF.StyleText(entry, text, kind, false) end
         end
     end
+    entry.textCaptured = true
 end
 
 function GUF.ApplyText(entry)
-    local cfg = GUF.db.frames[entry.unit]
+    local cfg = GUF.Runtime.Settings("text", entry).frames[entry.unit]
     if entry.name then
         -- The name-color hook is handled by Frames; protect its original color while restoring fonts.
         entry.nameColoring = true
@@ -285,7 +292,7 @@ function GUF.ApplyText(entry)
         if entry[kind] then
             if cfg.text[kind].fieldLayout then GUF.PrepareBarFields(entry, kind) end
             for _, text in pairs(GUF.NativeTexts(entry, kind)) do
-                GUF.RegionAlpha(text, (cfg.text[kind].fieldLayout or cfg.text[kind].split or cfg[kind .. "Text"] ~= "blizzard") and 0 or nil)
+                leaseAlpha(text, (cfg.text[kind].fieldLayout or cfg.text[kind].split or cfg[kind .. "Text"] ~= "blizzard") and 0 or nil)
                 GUF.StyleText(entry, text, kind, true)
             end
             GUF.StyleText(entry, entry[kind .. "Text"], kind, true)

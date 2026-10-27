@@ -331,11 +331,11 @@ end
 -- Focus must be cancelled before a cached page is hidden or rebound.
 function UI.CancelControlFocus(frame)
     if not frame then return end
+    if frame:GetObjectType() == "EditBox" then
+        frame:SetScript("OnEditFocusLost", nil)
+        frame:ClearFocus()
+    end
     for _, child in ipairs({ frame:GetChildren() }) do
-        if child:GetObjectType() == "EditBox" then
-            child:SetScript("OnEditFocusLost", nil)
-            child:ClearFocus()
-        end
         UI.CancelControlFocus(child)
     end
 end
@@ -366,81 +366,35 @@ UI.unitOrder = GUF.order
 
 function UI.LayoutName()
     local style = GUF.db.general.frameStyle
-    for _, layout in ipairs(GUF.frameStyles) do
-        if layout[1] == style then
-            local name = layout[2]:gsub(" Layout$", "")
-            return name
-        end
-    end
-    return style
+    local definition = GUF.Layouts.Get(style)
+    return definition and definition.title or style
 end
 
 function UI.LayoutCapabilities(unit)
-    local artistic = GUF.db.general.frameStyle == "artistic"
-    local blizzard = GUF.db.general.frameStyle == "blizzard"
-    return { artwork = artistic, design = artistic and (unit == "player" or unit == "target"),
-        barGeometry = artistic and (unit == "player" or unit == "target"),
-        levelIndicator = false,
-        classResources = artistic and GUF.UsesSegmentedResources(unit, true),
-        roleIndicator = unit == "player" and (blizzard or artistic) or unit == "target" and artistic,
-        raid = artistic, classification = artistic and unit == "target", threatRotation = false, bossAuras = unit == "player" }
+    return GUF.Layouts.Capabilities(GUF.db.general.frameStyle, unit)
 end
 
 function UI.LayoutIllustration(parent, style, entry)
-    if style == "blizzard" then return UI.BlizzardLayoutCard(parent, entry) end
-    if style ~= "artistic" then return end
-    entry = entry or GUF.CreateFrameSpecimen("player", parent, true)
+    if not GUF.Layouts.IsAvailable(style, "player") then return end
+    return GUF.Layouts.Get(style).renderCard(parent, entry)
+end
+
+function UI.ArtisticLayoutCard(parent, entry)
+    local style = "artistic"
+    entry = entry or GUF.CreateFrameSpecimen("player", parent, "artistic")
     entry.optionsPreview, entry.frame.goodUnitFramesSkin = true, true
     entry.previewIdentity = GUF.ArtisticPortraitIdentity("player", "player") or "class-hunter"
     -- Resolve the advertised layout independently of which one is active.
-    -- These settings are read only; never switch the profile to render a card.
-    local profile = GUF.db
-    local layout = profile.general.frameStyle == style and profile
-        or profile.layouts and profile.layouts[style] or GUF.GetLayoutDefaults(style)
+    -- Prepare inactive settings without switching the profile to render a card.
+    local layout = GUF.Settings.GetLayout(GUF.db, style)
     local cfg = layout.frames.player
     local class = GUF.PlayerDesignClass()
     local source = cfg.design.layered.enabled and class and GUF.ClassPortraitDesign(class, cfg.design.portraits[class])
         or GUF.BlizzardRingArtwork("player")
-    GUF.RenderFrameSpecimen(entry, nil, { style = style, config = cfg, portraitSource = source,
+    GUF.RenderFrameSpecimen(entry, nil, { style = style, settings = layout, portraitSource = source,
         layoutCard = true, state = "resting", states = { resting = true },
         group = "solo", subject = "player", health = 55 })
-    GUF.TintPresentationBar(entry.health, GUF.PreviewHealthColor(entry, "player", 55))
-    local _, token = UnitPowerType("player")
-    local color = not GUF.Secret(token) and GUF.powerColors[token] or GUF.powerColors.MANA
-    if cfg.bars.powerMode == "class" then GUF.TintPresentationBar(entry.power, GUF.ClassColor("player"))
-    else GUF.TintPresentationBar(entry.power, unpack(color or GUF.powerColors.MANA)) end
-    local frame, state = entry.frame, entry.artisticLayout
-    frame:SetScale(1)
-    local frameHeight = frame:GetHeight()
-    local left, right, bottom, top = 0, frame:GetWidth(), -frameHeight, 0
-    -- Measure only this owned specimen, including its overhanging ornament,
-    -- Level and status glyph. Never derive card bounds from a live unit frame.
-    local function include(region)
-        if region:GetObjectType() == "MaskTexture" then return end
-        local rect = GUF.FrameRectInUnit(entry, region)
-        if not rect then return end
-        local upper, lower = rect.top - frameHeight, rect.bottom - frameHeight
-        if region == state.rim.art and source.combined then
-            local factor = state.portraitWidth / source.diameter
-            upper = state.py + (source.centerY - source.paintTop) * factor
-            lower = state.py + (source.centerY - source.paintBottom) * factor
-        end
-        left, right = math.min(left, rect.left), math.max(right, rect.right)
-        bottom, top = math.min(bottom, lower), math.max(top, upper)
-    end
-    local function collect(host)
-        for _, region in ipairs({ host:GetRegions() }) do if region:IsShown() then include(region) end end
-        for _, child in ipairs({ host:GetChildren() }) do
-            if child:IsShown() then include(child); collect(child) end
-        end
-    end
-    collect(frame)
-    local width, height = math.max(1, right - left), math.max(1, top - bottom)
-    local scale = math.max(.1, math.min(1, (parent:GetWidth() - 12) / width, (parent:GetHeight() - 12) / height))
-    frame:SetScale(scale); frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", parent, "TOPLEFT",
-        (parent:GetWidth() - width * scale) / (2 * scale) - left,
-        -(parent:GetHeight() - height * scale) / (2 * scale) - top)
+    GUF.Presentation.FitCard(entry, parent)
     return entry
 end
 

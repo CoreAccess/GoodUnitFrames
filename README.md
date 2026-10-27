@@ -40,7 +40,7 @@ Class-themed **Player and Target frames** for **Retail** and **Forever** (**Clas
 
 [Report a bug or request a feature](https://github.com/CoreAccess/GoodUnitFrames/issues). Include your client/version, layout, reproduction steps and any Lua error or screenshot.
 
-Version **1.0.0** is being prepared for the first public release. CurseForge download details will be added when available.
+Version **1.0.1** is being prepared for the first public release. CurseForge download details will be added when available.
 
 ## Disclaimer
 

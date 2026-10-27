@@ -1,4 +1,8 @@
 local _, GUF = ...
+
+local function leaseAlpha(region, value, relative)
+    return GUF.RegionAlpha(region, value, relative, "ArtisticLayout")
+end
 local unpack = unpack or table.unpack
 local circle = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 local white = "Interface\\Buttons\\WHITE8X8"
@@ -13,7 +17,8 @@ local playerPortraitReference = { canvas = 1254, centerX = 626, centerY = 616.5,
 local base = { barWidth = 124, healthDifference = 10, portrait = 62,
     topInset = 1, divider = 1, bottomInset = 2, housingEdge = 3, header = 15 }
 function GUF.ArtisticPortraitArtwork(unit, liveUnit)
-    return GUF.SelectArtisticPortraitArtwork(unit, liveUnit) or portraitArt
+    local source, reason = GUF.SelectArtisticPortraitArtwork(unit, liveUnit)
+    return source or portraitArt, reason
 end
 
 function GUF.ArtisticPortraitReferenceArtwork(unit)
@@ -23,13 +28,22 @@ function GUF.ArtisticPortraitReferenceArtwork(unit)
 end
 
 function GUF.ArtisticBarHost(entry, kind)
-    local state = entry.artisticLayout
-    return state and state.active and state.renderBars and state.renderBars[kind] or entry[kind]
+    return GUF.Presentation.Role(entry, kind) or entry[kind]
+end
+
+-- Owned Retail bars do not need native amount-driven geometry to be readable.
+-- Keep Forever Target's existing native geometry path; Player isolation is
+-- already shared by its owned resource renderers on both clients.
+function GUF.ArtisticNativeBarsIsolated(entry, state)
+    state = state or entry.artisticLayout
+    return GUF.IsManagedUnit(entry.unit) and state ~= nil and state.renderBars ~= nil
+        and (entry.unit == "player" or GUF.isRetail)
 end
 
 function GUF.BarTextHost(entry, kind)
     if kind == "health" and entry.predictions then return entry.predictions.textLayer end
-    return GUF.ArtisticBarHost(entry, kind)
+    if kind == "health" and entry.configurationPreview and entry.textLayer then return entry.textLayer end
+    return GUF.Presentation.Role(entry, kind .. "Text") or entry[kind]
 end
 
 function GUF.LayoutArtisticDividerLayer(entry)
@@ -47,8 +61,8 @@ function GUF.LayoutArtisticRenderedBar(entry, kind, x, y, width, height)
     local state = entry.artisticLayout
     local render = state and state.renderBars and state.renderBars[kind]
     if not render then return end
-    -- Player and Target use the same public base geometry. Join opacity is
-    -- owned by the border backing, independently of the bar's fill height.
+    -- Player and Target use the same public base geometry. The shared header
+    -- divider owns its inset; fill sizes do not compensate for border seams.
     render:ClearAllPoints()
     render:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", x, y)
     render:SetSize(width, height)
@@ -91,6 +105,7 @@ local function suppressNativeDecorations(entry)
     local container = frame.PlayerFrameContainer or frame.TargetFrameContainer or frame
     local regions = { container.Flash, container.FrameFlash, frame.flash,
         frame.threatIndicator, frame.ThreatIndicator, entry.nameBackground }
+    local powerFeedback
     if entry.unit == "target" then
         -- ReputationColor carries every native reaction/tapped-grey backdrop;
         -- BossPortraitFrameTexture carries the native rank dragon.
@@ -107,6 +122,14 @@ local function suppressNativeDecorations(entry)
         regions.fullPower = entry.power and entry.power.FullPowerFrame
         regions.powerFeedback = entry.power and entry.power.FeedbackFrame
         regions.powerSpark = entry.power and entry.power.Spark
+        if GUF.isRetail and state.renderBars then
+            -- This red damage trail is a Health sibling, not a Power effect.
+            -- Its native placement can overlap the owned Artistic Power row.
+            regions.healthLoss = GUF.Client.ResolvePlayerHealthLoss(entry)
+            local effects = GUF.Client.ResolvePlayerPowerEffects(entry.power)
+            for key, region in pairs(effects or {}) do regions[key] = region end
+            powerFeedback = effects and effects.powerFeedback
+        end
         local textFrame = frame.rightFrame and frame.rightFrame.textFrame
         regions.overAbsorbGlow = textFrame and textFrame.overAbsorbGlow
         regions.overHealAbsorbGlow = textFrame and textFrame.overHealAbsorbGlow
@@ -119,20 +142,40 @@ local function suppressNativeDecorations(entry)
     end
     state.nativeDecorationHooks = state.nativeDecorationHooks or {}
     for _, region in pairs(regions) do
-        if region and not region.goodUnitFramesOwned and region.SetAlpha then
+        if region and not region.goodUnitFramesOwned and region.SetAlpha
+            and not (region.IsForbidden and region:IsForbidden()) then
             state.hidden[region] = true
-            GUF.RegionAlpha(region, 0)
+            leaseAlpha(region, 0)
             if not state.nativeDecorationHooks[region] then
-                state.nativeDecorationHooks[region] = true
                 -- Native faction/classification/status updates recolor/rebind these
                 -- textures as well as showing them. Reassert appearance only;
                 -- leave their controllers and numeric threat untouched.
                 local function suppress()
-                    if state.active then GUF.RegionAlpha(region, 0) end
+                    if state.active then leaseAlpha(region, 0) end
                 end
                 for _, method in ipairs({ "Show", "SetShown", "SetVertexColor", "SetAtlas", "SetTexture" }) do
-                    if type(region[method]) == "function" then hooksecurefunc(region, method, suppress) end
+                    if type(region[method]) == "function" then GUF.NativeProperties.Hook("ArtisticLayout:1", region, method, suppress) end
                 end
+                state.nativeDecorationHooks[region] = true
+            end
+        end
+    end
+    if powerFeedback and not powerFeedback.goodUnitFramesOwned then
+        state.powerFeedbackHooks = state.powerFeedbackHooks or {}
+        local watched = state.powerFeedbackHooks[powerFeedback] or {}
+        state.powerFeedbackHooks[powerFeedback] = watched
+        for _, method in ipairs({ "Initialize", "StartFeedbackAnim" }) do
+            if not watched[method] and type(powerFeedback[method]) == "function" then
+                GUF.NativeProperties.Hook("ArtisticLayout:2", powerFeedback, method, function()
+                    -- Ignore native amounts passed to the controller. Reconcile
+                    -- cosmetic leases after it initializes/starts an effect;
+                    -- released or replaced hosts cannot reacquire ownership.
+                    if state.active and state.renderBars and entry.power
+                        and entry.power.FeedbackFrame == powerFeedback then
+                        GUF.SuppressArtisticNativeBars(entry)
+                    end
+                end)
+                watched[method] = true
             end
         end
     end
@@ -152,7 +195,7 @@ function GUF.SuppressArtisticNativeBars(entry)
             if region == render or region == render:GetStatusBarTexture() then return end
         end
         state.hidden[region] = true
-        GUF.RegionAlpha(region, 0)
+        leaseAlpha(region, 0)
     end
     local function textures(owner)
         if not owner or GUF.IsUnmanagedUnitFrame(owner) or owner.goodUnitFramesOwned then return end
@@ -188,7 +231,7 @@ function GUF.SyncArtisticRenderedBar(entry, kind)
     if not render or state.renderWriting then return end
     state.renderWriting = true
     GUF.SuppressArtisticNativeBars(entry)
-    local unit, cfg = entry.frame.unit or entry.unit, GUF.db.frames[entry.unit]
+    local unit, cfg = entry.frame.unit or entry.unit, GUF.Runtime.Settings("colors", entry).frames[entry.unit]
     local exists = UnitExists(unit)
     if not GUF.Secret(exists) and not exists then
         render:Hide()
@@ -238,7 +281,7 @@ function GUF.PrintArtisticTargetBars()
         if type(value) == "number" then return string.format("%.2f", value) end
         return tostring(value)
     end
-    local unit, cfg = entry.frame.unit or entry.unit, GUF.db.frames.target
+    local unit, cfg = entry.frame.unit or entry.unit, GUF.Runtime.Settings("layout", "target").frames.target
     local _, class = UnitClass(unit)
     local powerType, powerToken = UnitPowerType(unit)
     local hasPower = "unavailable"
@@ -297,7 +340,7 @@ function GUF.ShowTargetDividerReport()
         if type(value) == "number" then return string.format("%.3f", value) end
         return tostring(value)
     end
-    local lines = { "Name/Health join report v4 (opaque backing); interface=" .. public(GUF.clientInterface) }
+    local lines = { "Name/Health join report v5 (shared border); interface=" .. public(GUF.clientInterface) }
     local function describe(label, specimen)
         local layout = specimen.artisticLayout
         local upper = layout.headerDivider or layout.separators and layout.separators[1]
@@ -323,7 +366,7 @@ function GUF.ShowTargetDividerReport()
         end
         lines[#lines + 1] = "\n" .. label .. "; rectangles are [left,bottom,right,top] in frame coordinates"
         for _, item in ipairs({ { "upper", upper }, { "lower", lower },
-            { "joinBacking", layout.nameHealthBacking }, { "nameBody", layout.nameStrip.body } }) do
+            { "nameBody", layout.nameStrip.body } }) do
             local region = item[2]
             if region then
                 local layer, sublevel = region:GetDrawLayer()
@@ -344,9 +387,9 @@ function GUF.ShowTargetDividerReport()
         lines[#lines + 1] = "rects: health=" .. rectangle(health) .. "; name=" .. rectangle(layout.nameStrip)
             .. "; housing=" .. rectangle(housing)
         lines[#lines + 1] = "geometry: healthY=" .. public(layout.healthY) .. "; headerTop=" .. public(layout.headerTop)
-            .. "; topInset=" .. public(layout.healthTopInset) .. "; joinOverlap=" .. public(GUF.ArtisticJoinOverlap(specimen))
+            .. "; topInset=" .. public(layout.healthTopInset) .. "; pixelSize=" .. public(GUF.ArtisticDividerPixelSize(specimen))
             .. "; effectiveScale=" .. public(specimen.frame:GetEffectiveScale())
-        lines[#lines + 1] = "Health texture setting=" .. public(GUF.db.frames[specimen.unit].bars.healthTexture)
+        lines[#lines + 1] = "Health texture setting=" .. public(GUF.Runtime.Settings("layout", specimen).frames[specimen.unit].bars.healthTexture)
     end
     local player = GUF.frames.player
     if player and player.artisticLayout and player.artisticLayout.active then describe("LIVE PLAYER", player) end
@@ -370,16 +413,16 @@ local function compact(unit)
     return unit == "pet" and .78 or unit == "targettarget" and .62 or 1
 end
 
-local function legacyDimensions(unit)
-    local cfg, scale = GUF.db.frames[unit], compact(unit)
+local function legacyDimensions(unit, cfg)
+    local scale = compact(unit)
     local width = number(cfg.width) and cfg.width >= 0 and cfg.width or 260 * scale
     local height = number(cfg.height) and cfg.height >= 0 and cfg.height or 90 * scale
     return math.max(math.ceil(180 * scale), math.min(300, width)), math.max(math.ceil(80 * scale), math.min(100, height))
 end
 
 -- Legacy migration helper; the old flexible preferences remain stored.
-function GUF.ArtisticLegacyBarSize(unit, kind)
-    local width, height = legacyDimensions(unit)
+function GUF.ArtisticLegacyBarSize(unit, kind, cfg)
+    local width, height = legacyDimensions(unit, cfg)
     local scale = compact(unit)
     local budget = height - 28 * scale
     return width - 81 * scale, kind == "health" and budget * .65 - 3 * scale or budget * .35 - 4 * scale
@@ -402,7 +445,7 @@ end
 
 function GUF.ArtisticPortraitScaleLimits(unit)
     if unit == "player" or unit == "target" then
-        return GUF.ArtisticMinimumPortraitScale(GUF.db.frames[unit]), 1.5
+        return GUF.ArtisticMinimumPortraitScale(GUF.Runtime.Settings("layout", unit).frames[unit]), 1.5
     end
     return 1, 1.5
 end
@@ -453,7 +496,7 @@ function GUF.ArtisticBarLimits(unit, kind)
     local minimum = math.ceil((kind == "health" and 12 or 8) * scale)
     local maximum = 100
     if unit == "player" or unit == "target" then
-        local cfg = GUF.db.frames[unit]
+        local cfg = GUF.Runtime.Settings("layout", unit).frames[unit]
         local key = kind == "name" and "header" or kind
         maximum = math.max(minimum, math.min(maximum,
             math.floor(maximumStackHeight - GUF.ArtisticStackHeight(cfg) + cfg.artistic.playerGeometry[key])))
@@ -463,7 +506,7 @@ end
 
 function GUF.ArtisticBarSize(unit, kind, config)
     if unit == "player" or unit == "target" then
-        local geometry = (config or GUF.db.frames[unit]).artistic.playerGeometry
+        local geometry = (config or GUF.Runtime.Settings("layout", unit).frames[unit]).artistic.playerGeometry
         return math.max(80, geometry.width - GUF.ArtisticBasePortraitWidth(unit, config) - 6),
             kind == "health" and geometry.health or geometry.power
     end
@@ -480,7 +523,7 @@ end
 
 function GUF.ArtisticDimensions(unit, config)
     if unit == "player" or unit == "target" then
-        local geometry = (config or GUF.db.frames[unit]).artistic.playerGeometry
+        local geometry = (config or GUF.Runtime.Settings("layout", unit).frames[unit]).artistic.playerGeometry
         return math.max(geometry.width, GUF.ArtisticBasePortraitWidth(unit, config) + 86), geometry.header + geometry.health + geometry.power + 4
     end
     local width, healthHeight = GUF.ArtisticBarSize(unit, "health")
@@ -495,7 +538,7 @@ end
 -- uses a fixed 100% baseline and the separately reported Portrait scale.
 function GUF.ArtisticBasePortraitWidth(unit, config)
     if unit == "player" or unit == "target" then
-        local geometry, source = (config or GUF.db.frames[unit]).artistic.playerGeometry, GUF.ArtisticPortraitReferenceArtwork(unit)
+        local geometry, source = (config or GUF.Runtime.Settings("layout", unit).frames[unit]).artistic.playerGeometry, GUF.ArtisticPortraitReferenceArtwork(unit)
         local height = geometry.header + geometry.health + geometry.power + 4
         return height * source.diameter / (source.paintBottom - source.paintTop)
     end
@@ -508,7 +551,7 @@ function GUF.ArtisticPortraitWidth(unit, config)
         local source = GUF.ArtisticPortraitReferenceArtwork(unit)
         baseline = portraitScaleHeight * source.diameter / (source.paintBottom - source.paintTop)
     end
-    return baseline * (config or GUF.db.frames[unit]).artistic.portraitScale
+    return baseline * (config or GUF.Runtime.Settings("layout", unit).frames[unit]).artistic.portraitScale
 end
 
 -- Translate the joined bars by the portrait's radius change, preserving their
@@ -519,7 +562,7 @@ function GUF.ArtisticBarOffset(unit, config)
 end
 
 function GUF.ArtisticPetOffset()
-    local cfg = GUF.db.frames.player
+    local cfg = GUF.Runtime.Settings("layout", "player").frames.player
     local clearance = 110
     for _, aura in ipairs(cfg.auras.buffs) do
         if aura.enabled and aura.anchorPoint ~= "FREE" and aura.anchorPoint:find("BOTTOM", 1, true) then
@@ -531,7 +574,7 @@ function GUF.ArtisticPetOffset()
 end
 
 local function layer(entry, level)
-    local frame = CreateFrame("Frame", nil, entry.frame)
+    local frame = GUF.Runtime.CreateFrame("Frame", nil, entry.frame)
     frame.goodUnitFramesOwned = true
     frame:SetAllPoints(entry.frame)
     frame:SetFrameLevel(entry.frame:GetFrameLevel() + level)
@@ -548,7 +591,7 @@ end
 
 local function surround(parent, housing, refined, cleanPlayer, unit, stack)
     -- Eight slices of captured Blizzard bar chrome; no installed custom graphics.
-    local frame = CreateFrame("Frame", nil, parent)
+    local frame = GUF.Runtime.CreateFrame("Frame", nil, parent)
     frame.goodUnitFramesOwned = true
     frame:EnableMouse(false)
     frame.edgeSize, frame.unit = 3, unit or "player"
@@ -608,16 +651,16 @@ local function circularFill(parent, drawLayer)
 end
 
 local function nameHeader(parent, unit)
-    local frame = CreateFrame("Frame", nil, parent)
+    local frame = GUF.Runtime.CreateFrame("Frame", nil, parent)
     frame.goodUnitFramesOwned = true
     frame:EnableMouse(false)
     frame.body = texture(frame, white, "BACKGROUND")
     frame.side = texture(frame, white, "BACKGROUND")
-    frame.corner = CreateFrame("Frame", nil, frame)
+    frame.corner = GUF.Runtime.CreateFrame("Frame", nil, frame)
     frame.corner.goodUnitFramesOwned = true
     frame.corner:EnableMouse(false)
     frame.corner:SetClipsChildren(true)
-    frame.disc = CreateFrame("Frame", nil, frame.corner)
+    frame.disc = GUF.Runtime.CreateFrame("Frame", nil, frame.corner)
     frame.disc.goodUnitFramesOwned = true
     frame.disc:EnableMouse(false)
     frame.cornerFill = texture(frame.disc, white, "BACKGROUND")
@@ -682,13 +725,13 @@ local function nameHeader(parent, unit)
 end
 
 local function circularSurround(parent, portrait, smallLevel)
-    local frame = CreateFrame("Frame", nil, parent)
+    local frame = GUF.Runtime.CreateFrame("Frame", nil, parent)
     frame.goodUnitFramesOwned = true
     frame:EnableMouse(false)
     frame.fill = circularFill(frame, "BACKGROUND")
     frame.fill:SetPoint("CENTER")
     frame.fill:SetVertexColor(.025, .025, .03, 1)
-    frame.chrome = CreateFrame("Frame", nil, frame)
+    frame.chrome = GUF.Runtime.CreateFrame("Frame", nil, frame)
     frame.chrome.goodUnitFramesOwned = true
     frame.chrome:EnableMouse(false)
     frame.chrome:SetAllPoints()
@@ -720,11 +763,16 @@ GUF.CreateArtisticNameHeader = nameHeader
 -- Row boundaries belong to the current presentation geometry. The native
 -- chrome strips contain no divider marks, so independent row-height changes
 -- cannot leave a second junction behind. Shared by live and owned specimens.
-function GUF.StyleArtisticBarDivider(region, alpha)
-    region:SetColorTexture(.66, .68, .71, alpha or 1)
+function GUF.StyleArtisticBarDivider(region, strength)
+    -- Shade the existing border material rather than making it transparent.
+    -- This is the previous silver-over-dark appearance in one opaque texture.
+    strength = strength or 1
+    local background = .035 * (1 - strength)
+    region:SetColorTexture(.66 * strength + background, .68 * strength + background,
+        .71 * strength + background, 1)
 end
 
-function GUF.ArtisticJoinOverlap(entry)
+function GUF.ArtisticDividerPixelSize(entry)
     local scale = entry.frame:GetEffectiveScale()
     if not number(scale) or scale <= 0 then return 1 end
     local factor = PixelUtil and PixelUtil.GetPixelToUIUnitFactor and PixelUtil.GetPixelToUIUnitFactor()
@@ -743,34 +791,35 @@ function GUF.LayoutArtisticBarDividers(entry)
     local effectiveScale = entry.frame:GetEffectiveScale()
     local pixel = not GUF.Secret(effectiveScale) and type(effectiveScale) == "number" and effectiveScale > 0
         and 1 / effectiveScale or 0
-    for _, spec in ipairs({ { upper, state.healthY, state.healthTopInset },
-        { lower, powerY, state.dividerHeight } }) do
-        spec[1]:ClearAllPoints()
-        spec[1]:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", state.housingX + inset, spec[2])
-        spec[1]:SetSize(width, math.max(spec[3], pixel))
-        spec[1]:SetDrawLayer("OVERLAY", 7)
-        if spec[1].SetSnapToPixelGrid then spec[1]:SetSnapToPixelGrid(true) end
-        if spec[1].SetTexelSnappingBias then spec[1]:SetTexelSnappingBias(0) end
-    end
+    -- Name ends at healthY and the Health fill starts healthTopInset below it.
+    -- Share the Name edge directly; do not snap the divider independently from
+    -- the unsnapped Name body at fractional frame scales.
+    local joinInset = GUF.IsManagedUnit(entry.unit) and 1.5 * state.scale or inset
+    local nameX = entry.unit == "target" and state.barX or state.px + state.barOffset
+    upper:ClearAllPoints()
+    upper:SetPoint("TOPLEFT", state.nameStrip, "BOTTOMLEFT", state.housingX + joinInset - nameX, 0)
+    upper:SetSize(math.max(1, state.housingWidth - 2 * joinInset),
+        math.max(state.healthTopInset, GUF.ArtisticDividerPixelSize(entry)))
+    upper:SetDrawLayer("OVERLAY", 7)
+    if upper.SetSnapToPixelGrid then upper:SetSnapToPixelGrid(false) end
+    if upper.SetTexelSnappingBias then upper:SetTexelSnappingBias(0) end
+    -- Retain the existing Health/Power boundary and its resource-row behavior.
+    lower:ClearAllPoints()
+    lower:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", state.housingX + inset, powerY)
+    lower:SetSize(width, math.max(state.dividerHeight, pixel))
+    lower:SetDrawLayer("OVERLAY", 7)
+    if lower.SetSnapToPixelGrid then lower:SetSnapToPixelGrid(true) end
+    if lower.SetTexelSnappingBias then lower:SetTexelSnappingBias(0) end
     GUF.StyleArtisticBarDivider(upper, .72)
     GUF.StyleArtisticBarDivider(lower)
-    if state.nameHealthBacking then
-        -- Native backdrop suppression must not make the join see-through.
-        -- Back the divider with opaque bar material and cover one screen pixel
-        -- above its boundary so independently rounded edges cannot open a seam.
-        local reach = math.max(0, inset - 1.5 * state.scale)
-        state.nameHealthBacking:ClearAllPoints()
-        state.nameHealthBacking:SetPoint("TOPLEFT", upper, "TOPLEFT", -reach, GUF.ArtisticJoinOverlap(entry))
-        state.nameHealthBacking:SetPoint("BOTTOMRIGHT", upper, "BOTTOMRIGHT", reach, 0)
-        state.nameHealthBacking:Show()
-    end
     upper:Show(); lower:SetShown(not state.noPower)
 end
 
 function GUF.UpdateArtisticPortraitArtwork(entry)
     local state = entry.artisticLayout
     if not state or not state.active or not state.portraitWidth then return end
-    local source = GUF.ArtisticPortraitArtwork(entry.unit, entry.frame.unit or entry.unit)
+    local source, reason = GUF.ArtisticPortraitArtwork(entry.unit, entry.frame.unit or entry.unit)
+    GUF.RememberPortraitArtworkFallback(entry, source, reason)
     if state.rim.source == source then return end
     -- Only owned cosmetic regions change here, including during target swaps in
     -- combat. Do not resize/anchor the secure button or native Health/Power bars.
@@ -794,7 +843,7 @@ function GUF.SetArtisticBadgeChrome(badge, shown)
 end
 
 function GUF.CreateArtisticBadge(parent, smallLevel)
-    local badge = CreateFrame("Frame", nil, parent)
+    local badge = GUF.Runtime.CreateFrame("Frame", nil, parent)
     badge.goodUnitFramesOwned = true
     badge:EnableMouse(false)
     badge.rim = circularSurround(badge, false, smallLevel)
@@ -826,7 +875,7 @@ function GUF.CreateArtisticBadge(parent, smallLevel)
 end
 
 local function panel(parent, borderParent, refined, unit)
-    local frame = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    local frame = GUF.Runtime.CreateFrame("Frame", nil, parent, "BackdropTemplate")
     frame.goodUnitFramesOwned = true
     frame:EnableMouse(false)
     -- Background below live fills, segmented border above them. A single lower
@@ -856,6 +905,7 @@ local function track(entry, state, region)
     local item = { geometry = geometry, parent = region:GetParent(), width = region.GetFont and region:GetWidth(),
         justify = region.GetJustifyH and region:GetJustifyH() }
     state.regions[region] = item
+    GUF.NativeProperties.Track(region, "layoutGeometry", entry, item)
     return item
 end
 
@@ -868,9 +918,9 @@ local function transformBase(region, points, width, height)
 end
 
 local function place(entry, state, region, x, y, width, height, parent, point, relative)
-    if region and entry.unit == "player" and state.renderBars and (region == entry.health or region == entry.power) then
-        -- Owned Player bars already render this geometry. Moving their native
-        -- sources leaves an unrestorable offset once Health becomes opaque.
+    if region and GUF.ArtisticNativeBarsIsolated(entry, state) and (region == entry.health or region == entry.power) then
+        -- Owned bars already render this geometry. Leave their native sources
+        -- in place so opaque geometry cannot block or corrupt a later handoff.
         state.barGeometry = state.barGeometry or {}
         state.barGeometry[region] = { x = x, y = y, width = width, height = height }
         GUF.LayoutArtisticRenderedBar(entry, region == entry.health and "health" or "power", x, y, width, height)
@@ -904,8 +954,8 @@ function GUF.RestoreArtisticPlayerNameAnchor(entry)
     local unit = entry.frame.unit
     if GUF.Secret(unit) or (unit ~= nil and unit ~= "player") then return false end
     if entry.layoutWriting or entry.sizeWriting or GUF.geometryWriting then return false end
-    if GUF.editing or GUF.Restricted() or not number(state.scale) then GUF.pending = true; return false end
-    local settings = GUF.db.frames.player.text.name
+    if GUF.editing or GUF.Restricted() or not number(state.scale) then GUF.DeferRuntime("native-readiness"); return false end
+    local settings = GUF.Runtime.Settings("layout", "player").frames.player.text.name
     local x, y = 4 * state.scale, 0
     local points = { { "LEFT", state.nameArea, "LEFT", x, y } }
     if not settings.nativeStyle then x, y = x + settings.x, y + settings.y end
@@ -956,12 +1006,12 @@ local function layoutNativeHealthText(entry, state, text)
         -- Owned Target text continues through UpdateBarText. Native labels can
         -- wait for the normal out-of-combat apply instead of writing anchors
         -- from inside Blizzard's combat text-layout callbacks.
-        GUF.pending = true
+        GUF.DeferRuntime("native-readiness")
         return
     end
     local point = (text == entry.health.RightText or text == entry.healthArea.RightText) and "RIGHT"
         or (text == entry.health.LeftText or text == entry.healthArea.LeftText) and "LEFT" or "CENTER"
-    local cfg = GUF.db.frames[entry.unit]
+    local cfg = GUF.Runtime.Settings("layout", entry).frames[entry.unit]
     local size = cfg.text.health.custom and cfg.text.health.size or cfg.fontSize
     local height = state.noPower and state.healthRowHeight + state.powerRowHeight - state.healthTopInset - 2 * state.scale
         or state.healthFillHeight
@@ -985,9 +1035,9 @@ local function ownNativeHealthText(entry, state, text)
                 or GUF.editing or (original and original.writing) then return end
             layoutNativeHealthText(entry, state, text)
         end
-        hooksecurefunc(text, "SetPoint", refresh)
-        hooksecurefunc(text, "SetWidth", refresh)
-        hooksecurefunc(text, "SetSize", refresh)
+        GUF.NativeProperties.Hook("ArtisticLayout:3", text, "SetPoint", refresh)
+        GUF.NativeProperties.Hook("ArtisticLayout:4", text, "SetWidth", refresh)
+        GUF.NativeProperties.Hook("ArtisticLayout:5", text, "SetSize", refresh)
     end
     layoutNativeHealthText(entry, state, text)
 end
@@ -998,32 +1048,36 @@ local function mask(entry, state, region, owner, circular)
         local original = { texture = region:GetTexture(), atlas = region.GetAtlas and region:GetAtlas(),
             coords = { region:GetTexCoord() }, owner = owner, circular = circular }
         state.masks[region] = original
+        GUF.NativeProperties.Track(region, "maskMedia", entry, original)
+    end
+    local original = state.masks[region]
+    if not original.hooked then
         -- Classification changes reset masks directly, bypassing StatusBar size
         -- setters. Keep the rectangular Artistic mask even during combat.
         local function refresh()
             if not state.active or original.writing or entry.layoutWriting or GUF.editing then return end
             mask(entry, state, region, original.owner, original.circular)
         end
-        hooksecurefunc(region, "SetAtlas", function(_, atlas)
+        GUF.NativeProperties.Hook("ArtisticLayout:6", region, "SetAtlas", function(_, atlas)
             if original.writing or not state.active or entry.layoutWriting then return end
             original.texture, original.atlas, original.coords = region:GetTexture(), atlas, { region:GetTexCoord() }
             refresh()
         end)
-        hooksecurefunc(region, "SetTexture", function()
+        GUF.NativeProperties.Hook("ArtisticLayout:7", region, "SetTexture", function()
             if original.writing or not state.active or entry.layoutWriting then return end
             original.texture, original.atlas = region:GetTexture(), region:GetAtlas()
             refresh()
         end)
-        hooksecurefunc(region, "SetTexCoord", function()
+        GUF.NativeProperties.Hook("ArtisticLayout:8", region, "SetTexCoord", function()
             if original.writing or not state.active or entry.layoutWriting then return end
             original.coords = { region:GetTexCoord() }
             refresh()
         end)
         for _, method in ipairs({ "SetPoint", "SetAllPoints", "SetSize", "SetWidth", "SetHeight" }) do
-            hooksecurefunc(region, method, refresh)
+            GUF.NativeProperties.Hook("ArtisticLayout:9", region, method, refresh)
         end
+        original.hooked = true
     end
-    local original = state.masks[region]
     original.owner, original.circular, original.writing = owner, circular, true
     local geometryWriting = GUF.geometryWriting
     GUF.geometryWriting = true
@@ -1054,7 +1108,10 @@ end
 function GUF.RefreshArtisticBarPresentation(entry)
     local state = entry.artisticLayout
     if entry.unit ~= "target" or not state or not state.active or not state.renderBars
-        or not state.barGeometry or state.presentationWriting or entry.layoutWriting or GUF.editing then return end
+        or not state.barGeometry or state.presentationWriting or entry.layoutWriting or GUF.editing then
+        if entry.unit == "target" and GUF.Layouts.NeedsLiveApply(entry) then GUF.DeferRuntime("native-readiness") end
+        return
+    end
     state.presentationWriting = true
     -- A cosmetic post-update repair, not a full secure layout application.
     -- Native classification writes fill atlases and masks after unit values.
@@ -1079,7 +1136,7 @@ end
 local function hide(state, region)
     if not region or not region.SetAlpha or region.goodUnitFramesOwned or state.preserved[region] then return end
     state.hidden[region] = true
-    GUF.RegionAlpha(region, 0)
+    leaseAlpha(region, 0)
 end
 
 local function hideTextures(state, owner, keep)
@@ -1096,6 +1153,7 @@ local function create(entry)
     if not portrait or not entry.health or not entry.power then return end
     local state = { unit = entry.unit, regions = {}, masks = {}, hidden = {}, preserved = {}, container = container, portrait = portrait,
         playerRefinement = entry.unit == "player", refinedHousing = entry.unit == "player" or entry.unit == "target" }
+    entry.artisticLayout = state
     for _, region in pairs(entry.regions.resource) do state.preserved[region] = true end
     state.background, state.ornaments, state.badgeLayer = layer(entry, 0), layer(entry, 5), layer(entry, 8)
     -- Retail Health geometry may become restricted on every class. Keep the
@@ -1105,7 +1163,7 @@ local function create(entry)
         and (GUF.isRetail or GUF.UsesSegmentedResources("player")) then
         state.renderBars = {}
         for _, kind in ipairs({ "health", "power" }) do
-            local render = CreateFrame("StatusBar", nil, state.background)
+            local render = GUF.Runtime.CreateFrame("StatusBar", nil, state.background)
             render.goodUnitFramesOwned = true
             render:EnableMouse(false)
             -- Own a specific texture object, not a native fill or atlas.
@@ -1147,24 +1205,24 @@ local function create(entry)
         state.healthShell:SetBackdropColor(0, 0, 0, 0)
         state.powerShell:SetBackdropColor(0, 0, 0, 0)
     end
-    state.nameArea = CreateFrame("Frame", nil, state.nameStrip)
+    state.nameArea = GUF.Runtime.CreateFrame("Frame", nil, state.nameStrip)
     state.nameArea.goodUnitFramesOwned = true
     state.nameArea:EnableMouse(false)
     -- Fill extensions can run under the portrait; keep readable text/casts in
     -- the original visible bar span instead of centering them under the ring.
     state.textAreas, state.castAreas = {}, {}
     for _, kind in ipairs({ "health", "power" }) do
-        local area = CreateFrame("Frame", nil, state.renderBars and state.renderBars[kind] or entry[kind])
+        local area = GUF.Runtime.CreateFrame("Frame", nil, state.renderBars and state.renderBars[kind] or entry[kind])
         area.goodUnitFramesOwned = true
         area:EnableMouse(false)
         state.textAreas[kind] = area
-        local castArea = CreateFrame("Frame", nil, state.renderBars and state.renderBars[kind] or entry[kind])
+        local castArea = GUF.Runtime.CreateFrame("Frame", nil, state.renderBars and state.renderBars[kind] or entry[kind])
         castArea.goodUnitFramesOwned = true
         castArea:EnableMouse(false)
         state.castAreas[kind] = castArea
     end
     state.separators = {}
-    state.dividerLayer = CreateFrame("Frame", nil, state.background)
+    state.dividerLayer = GUF.Runtime.CreateFrame("Frame", nil, state.background)
     state.dividerLayer.goodUnitFramesOwned = true
     state.dividerLayer:EnableMouse(false)
     state.dividerLayer:SetAllPoints(entry.frame)
@@ -1175,12 +1233,6 @@ local function create(entry)
         if separator.SetSnapToPixelGrid then separator:SetSnapToPixelGrid(false) end
         if separator.SetTexelSnappingBias then separator:SetTexelSnappingBias(0) end
         state.separators[i] = separator
-    end
-    if entry.unit == "target" then
-        state.nameHealthBacking = texture(state.dividerLayer, white, "BACKGROUND")
-        state.nameHealthBacking:SetColorTexture(.035, .035, .035, 1)
-        if state.nameHealthBacking.SetSnapToPixelGrid then state.nameHealthBacking:SetSnapToPixelGrid(false) end
-        if state.nameHealthBacking.SetTexelSnappingBias then state.nameHealthBacking:SetTexelSnappingBias(0) end
     end
     state.badges = {}
     for _, key in ipairs({ "level", "combat", "pvp", "leader", "loot", "role", "raid", "status", "resurrect" }) do
@@ -1195,22 +1247,43 @@ local function create(entry)
     if entry.unit == "target" then
         for _, kind in ipairs({ "health", "power" }) do
             local native = entry[kind]
-            native:HookScript("OnShow", function() GUF.RefreshArtisticBarPresentation(entry) end)
+            GUF.NativeProperties.HookScript("ArtisticLayout:script:1", native, "OnShow", function() GUF.RefreshArtisticBarPresentation(entry) end)
             if kind == "power" then
-                native:HookScript("OnHide", function() GUF.RefreshArtisticBarPresentation(entry) end)
+                GUF.NativeProperties.HookScript("ArtisticLayout:script:2", native, "OnHide", function() GUF.RefreshArtisticBarPresentation(entry) end)
             end
-            hooksecurefunc(native, "SetFrameLevel", function() GUF.LayoutArtisticRenderedLayers(entry) end)
+            GUF.NativeProperties.Hook("ArtisticLayout:10", native, "SetFrameLevel", function() GUF.LayoutArtisticRenderedLayers(entry) end)
         end
-        hooksecurefunc(entry.frame, "SetFrameLevel", function() GUF.LayoutArtisticRenderedLayers(entry) end)
+        GUF.NativeProperties.Hook("ArtisticLayout:11", entry.frame, "SetFrameLevel", function() GUF.LayoutArtisticRenderedLayers(entry) end)
         for _, method in ipairs({ "Update", "CheckClassification" }) do
             if type(entry.frame[method]) == "function" then
-                hooksecurefunc(entry.frame, method, function() GUF.RefreshArtisticBarPresentation(entry) end)
+                GUF.NativeProperties.Hook("ArtisticLayout:12", entry.frame, method, function() GUF.RefreshArtisticBarPresentation(entry) end)
             end
         end
     end
     entry.artisticLayout = state
     state.background:Hide(); state.ornaments:Hide(); state.badgeLayer:Hide()
+    state.created = true
+    GUF.Runtime.Constructed()
     return state
+end
+
+local function restoreGeometryReady(region, item)
+    local geometry = item and item.geometry
+    if not geometry or geometry.points == nil or geometry.pointsReadable == false or GUF.ReadPoints(region) == nil then return false end
+    if geometry.hasSize and (not number(geometry.width) or not number(geometry.height)) then return false end
+    for _, point in ipairs(geometry.points) do
+        if not number(point[4]) or not number(point[5]) then return false end
+    end
+    return true
+end
+
+function GUF.ArtisticCleanupReady(entry)
+    local state = entry.artisticLayout
+    if not state or state.active then return false end
+    for region in pairs(state.restorePending or {}) do
+        if restoreGeometryReady(region, state.regions[region]) then return true end
+    end
+    return false
 end
 
 local function restore(entry, state)
@@ -1222,7 +1295,7 @@ local function restore(entry, state)
     -- Release the old geometry owner before native resize/layout callbacks run.
     -- Otherwise a restore write can be repaired back to Artistic bounds.
     state.active = false
-    if state.powerSuppressed then GUF.RegionAlpha(entry.power, nil) end
+    if state.powerSuppressed then leaseAlpha(entry.power, nil) end
     state.noPower, state.powerSuppressed, state.powerCapacityReason = nil, nil, nil
     if state.renderBars then
         for _, kind in ipairs({ "health", "power" }) do
@@ -1261,12 +1334,7 @@ local function restore(entry, state)
         -- A native Health controller may make its geometry opaque even outside
         -- combat. Release the skin as a whole; defer only this native region.
         -- Captured public anchors do not make its current geometry readable.
-        local readable = geometry.points ~= nil and geometry.pointsReadable ~= false and GUF.ReadPoints(region) ~= nil
-        if geometry.hasSize and (not number(geometry.width) or not number(geometry.height)) then readable = false end
-        for _, point in ipairs(geometry.points or {}) do
-            if not number(point[4]) or not number(point[5]) then readable = false end
-        end
-        if not readable or deferred[region] then deferred[region] = true; return end
+        if not restoreGeometryReady(region, item) or deferred[region] then deferred[region] = true; return end
         local original = entry.textOriginals and entry.textOriginals[region]
         local writing = original and original.writing
         if original then original.writing = true end
@@ -1286,7 +1354,7 @@ local function restore(entry, state)
     for region in pairs(state.regions) do restoreRegion(region) end
     state.restorePending = next(deferred) and deferred or nil
     state.portrait:SetDrawLayer(unpack(state.portraitLayer))
-    for region in pairs(state.hidden) do GUF.RegionAlpha(region, nil) end
+    for region in pairs(state.hidden) do leaseAlpha(region, nil) end
     state.hidden, state.active = {}, false
     state.background:Hide(); state.ornaments:Hide(); state.badgeLayer:Hide()
 end
@@ -1338,7 +1406,7 @@ function GUF.SyncArtisticPowerLayout(entry, force, maximum)
     local absent, reason = noPower(entry, maximum)
     state.powerCapacityReason = reason
     if not force and state.noPower == absent then return end
-    if GUF.editing then GUF.pending = true; return end
+    if GUF.editing then GUF.DeferRuntime("native-readiness"); return end
     -- An owned bar does not need its hidden native source resized when
     -- power availability changes. Keep the Dino-style renderer independent.
     local permitted = not state.renderBars
@@ -1348,7 +1416,7 @@ function GUF.SyncArtisticPowerLayout(entry, force, maximum)
         local ok, protected = pcall(entry.health.IsProtected, entry.health)
         if not ok or GUF.Secret(protected) or protected then
             permitted = false
-            if not state.renderBars then GUF.pending = true; return end
+            if not state.renderBars then GUF.DeferRuntime("native-readiness"); return end
         end
     end
     local writing, geometryWriting = entry.layoutWriting, GUF.geometryWriting
@@ -1368,10 +1436,10 @@ function GUF.SyncArtisticPowerLayout(entry, force, maximum)
     state.powerShell:SetShown(not absent)
     state.separators[2]:SetShown(not absent)
     if absent then
-        GUF.RegionAlpha(entry.power, 0)
+        leaseAlpha(entry.power, 0)
         state.powerSuppressed = true
     elseif state.powerSuppressed then
-        GUF.RegionAlpha(entry.power, nil)
+        leaseAlpha(entry.power, nil)
         state.powerSuppressed = nil
     end
     state.noPower = absent
@@ -1479,8 +1547,18 @@ function GUF.SetArtisticRoleIcon(icon, role, frame)
 end
 
 function GUF.UpdateArtisticState(entry)
-    local state, cfg = entry.artisticLayout, GUF.db.frames[entry.unit]
+    local state, cfg = entry.artisticLayout, GUF.Runtime.Settings("layout", entry).frames[entry.unit]
     if not state or not state.active then return end
+    if entry.unit == "player" and not entry.configurationPreview then
+        local summons = GUF.Client.ResolveDruidSummonFrame()
+        if summons and not summons.goodUnitFramesOwned then
+            -- Suppress only the native summon presentation. Its events,
+            -- cooldowns and shown state stay native; normal layout release
+            -- restores the latest captured alpha. Recheck late-loaded hosts.
+            state.hidden[summons] = true
+            leaseAlpha(summons, 0)
+        end
+    end
     -- Complete generated rings replace the historical procedural border inlay.
     for _, segment in ipairs(state.classTrim) do segment:Hide() end
     for _, frame in pairs(state.badges) do frame:Hide() end
@@ -1564,37 +1642,42 @@ function GUF.UpdateArtisticState(entry)
     for _, item in ipairs(state.dragon) do item.region:Hide() end
 end
 
-function GUF.ApplyArtisticLayout(entry)
-    if GUF.Restricted() or GUF.editing then GUF.pending = true; return end
-    local enabled = GUF.db.general.frameStyle == "artistic"
+function GUF.ReleaseArtisticLayout(entry)
+    if GUF.Restricted() or GUF.editing then GUF.DeferRuntime("native-readiness"); return "deferred", "restricted" end
     local state = entry.artisticLayout
-    if not enabled and not (state and (state.active or state.restorePending)) then return end
-    if enabled and not state then state = create(entry) end
-    if not state then return end
+    if not (state and (state.active or state.restorePending)) then return "released" end
     -- Exit must release native visibility and every readable component even
     -- when a single native bar's current/cached geometry is restricted.
-    if not enabled then
-        local writing, geometryWriting = entry.layoutWriting, GUF.geometryWriting
-        entry.layoutWriting, GUF.geometryWriting = true, true
-        restore(entry, state)
-        entry.layoutWriting, GUF.geometryWriting = writing, geometryWriting
-        return
-    end
+    local writing, geometryWriting = entry.layoutWriting, GUF.geometryWriting
+    entry.layoutWriting, GUF.geometryWriting = true, true
+    restore(entry, state)
+    entry.layoutWriting, GUF.geometryWriting = writing, geometryWriting
+    if state.restorePending then return "restoring", "native-geometry", state.restorePending end
+    return "released"
+end
+
+function GUF.ApplyArtisticLayout(entry)
+    if GUF.Restricted() or GUF.editing then GUF.DeferRuntime("native-readiness"); return "deferred", "restricted" end
+    -- Keep the legacy entry point usable while dispatch moves to definitions.
+    if GUF.Runtime.Settings("layout", entry).general.frameStyle ~= "artistic" then return GUF.ReleaseArtisticLayout(entry) end
+    local state = entry.artisticLayout
+    if not state or not state.created then state = create(entry) end
+    if not state then return "unavailable", "native-parts" end
     local nativeRegions = { entry.frame, state.portrait }
-    if not (entry.unit == "player" and state.renderBars) then
+    if not GUF.ArtisticNativeBarsIsolated(entry, state) then
         nativeRegions[#nativeRegions + 1] = entry.health
         nativeRegions[#nativeRegions + 1] = entry.power
     end
     for _, region in ipairs(nativeRegions) do
         local item = track(entry, state, region)
         if not item or not number(item.geometry.width) or not number(item.geometry.height)
-            or not GUF.ReadPoints(region) then GUF.pending = true; return end
+            or not GUF.ReadPoints(region) then GUF.DeferRuntime("native-readiness"); return "deferred", "native-geometry" end
     end
     entry.layoutWriting, GUF.geometryWriting = true, true
     do
         state.restorePending = nil
         state.active = true
-        local geometry = GUF.ArtisticPresentationGeometry(entry.unit, entry.frame.unit or entry.unit)
+        local geometry = GUF.Presentation.Geometry(entry)
         for key, value in pairs(geometry) do state[key] = value end
         local scale, width, height = compact(entry.unit), state.width, state.height
         state.scale = scale
@@ -1651,28 +1734,16 @@ function GUF.ApplyArtisticLayout(entry)
             castArea:SetPoint("TOPLEFT", host, "TOPLEFT", castLeft + state.castBorderInset - fillX, 0)
             castArea:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", castRight - state.castBorderInset - fillX - fillWidth, 0)
         end
-        local headerX = entry.unit == "target" and state.barX or state.px + state.barOffset
-        local headerRight = entry.unit == "target" and state.px + state.barOffset or state.barX + state.barWidth
-        local headerHeight = state.headerTop - healthY
-        state.nameStrip:ClearAllPoints()
-        state.nameStrip:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", headerX, state.headerTop)
-        state.nameStrip:SetSize(headerRight - headerX, headerHeight)
-        state.nameStrip:LayoutHeader(headerRight - headerX, headerHeight, entry.unit == "target", 6 * scale)
-        state.nameStrip:SetAlpha(GUF.db.frames[entry.unit].artistic.nameBackgroundAlpha)
-        GUF.LayoutArtisticThreatName(entry)
-        state.nameArea:ClearAllPoints()
-        state.nameArea:SetPoint("TOPLEFT", state.nameStrip, "TOPLEFT", visibleX - headerX, 0)
-        state.nameArea:SetPoint("BOTTOMRIGHT", state.nameStrip, "BOTTOMRIGHT", visibleX + barWidth - headerRight, 0)
-        state.nameTextWidth = math.max(1, barWidth - 8 * scale)
+        local headerHeight = GUF.LayoutPresentationHeader(entry, state, GUF.PresentationFrameSettings(entry))
         if not state.indicatorArea then
-            state.indicatorArea = CreateFrame("Frame", nil, state.ornaments)
+            state.indicatorArea = GUF.Runtime.CreateFrame("Frame", nil, state.ornaments)
             state.indicatorArea.goodUnitFramesOwned = true
         end
         state.indicatorArea:ClearAllPoints()
         state.indicatorArea:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", state.barX, healthY)
         state.indicatorArea:SetSize(state.barWidth, stackHeight)
         if entry.unit == "player" then
-            state.fullWidthCast = state.fullWidthCast or CreateFrame("Frame", nil, state.ornaments)
+            state.fullWidthCast = state.fullWidthCast or GUF.Runtime.CreateFrame("Frame", nil, state.ornaments)
             state.fullWidthCast.goodUnitFramesOwned = true
             state.fullWidthCast:ClearAllPoints()
             state.fullWidthCast:SetPoint("BOTTOMLEFT", entry.frame, "BOTTOMLEFT", state.barOffset + state.castBorderInset, state.castBorderInset)
@@ -1748,12 +1819,13 @@ function GUF.ApplyArtisticLayout(entry)
         GUF.LayoutBarDesign(entry)
     end
     entry.layoutWriting, GUF.geometryWriting = nil, nil
+    return "applied"
 end
 
 function GUF.FinalizeArtisticLayout(entry)
     local state = entry.artisticLayout
     if not state or not state.active then return end
-    for region in pairs(state.hidden) do GUF.RegionAlpha(region, 0) end
+    for region in pairs(state.hidden) do leaseAlpha(region, 0) end
     GUF.UpdateArtisticState(entry)
 end
 
@@ -1771,4 +1843,40 @@ function GUF.UpdateArtisticStates()
             GUF.UpdateOptionsPreview()
         end
     end
+end
+
+local function needsArtisticRefresh(entry, region, geometry)
+    local layout = entry.artisticLayout
+    if not layout then return false end
+    if layout.active then
+        -- CaptureSize watches the native subtree, including children Artistic
+        -- never moves. Only our tracked geometry can need a layout repair.
+        -- Root/owned-bar repairs already ran before this fallback; resources
+        -- retain their own native lifecycle hooks and are excluded by CaptureSize.
+        if not layout.regions or layout.regions[region]
+            or layout.barGeometry and layout.barGeometry[region] then return true end
+        local counts = GUF.Updates.stats.geometryUnowned
+        counts[entry.unit] = (counts[entry.unit] or 0) + 1
+        return false
+    end
+    if not (layout.restorePending and layout.restorePending[region]) then return false end
+    if geometry.hasSize and (not number(geometry.width) or not number(geometry.height)) then return false end
+    return geometry.pointsReadable ~= false and GUF.ReadPoints(region) ~= nil
+end
+
+function GUF.RefreshArtisticNativeGeometry(entry, region, geometry)
+    if GUF.RestoreArtisticBarGeometry(entry, region) then return true end
+    local retry = needsArtisticRefresh(entry, region, geometry)
+    local state = entry.artisticLayout
+    return false, retry, retry and state and not state.active and "cleanup" or nil
+end
+
+function GUF.ArtisticWriterStates(entry, shallow)
+    local state = entry.artisticLayout
+    if not state then return {} end
+    local result = { state }
+    if not shallow then
+        for _, mask in pairs(state.masks or {}) do result[#result + 1] = mask end
+    end
+    return result
 end

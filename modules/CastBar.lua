@@ -34,17 +34,21 @@ local function durationFor(func, unit, ...)
 end
 
 local function nativeCastBar(entry)
-    if entry.unit == "player" then return PlayerCastingBarFrame or CastingBarFrame end
-    if entry.unit == "pet" then return PetCastingBarFrame end
-    local live = entry.configurationPreview and GUF.frames[entry.unit]
-    local frame = live and live.frame or entry.frame
-    if entry.unit == "target" then return frame.spellbar or frame.SpellBar or TargetFrameSpellBar end
+    local frame
+    if entry.unit == "target" then
+        local live = entry.configurationPreview and GUF.frames[entry.unit]
+        frame = live and live.frame or entry.frame
+    end
+    -- Keep view selection here; the client boundary only discovers native
+    -- objects. Legacy callers receive the bar alone, not discovery status.
+    local bar = GUF.Client.ResolveCastBar(entry.unit, frame)
+    return bar
 end
 
 GUF.NativeCastBar = nativeCastBar
 
 function GUF.UsesNativeCastBar(entry)
-    return GUF.db.general.frameStyle == "blizzard" and nativeCastBar(entry) ~= nil
+    return GUF.Runtime.Settings("cast", entry).general.frameStyle == "blizzard" and nativeCastBar(entry) ~= nil
 end
 
 function GUF.CastSourceText(entry)
@@ -65,7 +69,7 @@ end
 -- Callers guard protected geometry. Always anchor from saved unit-relative
 -- coordinates, never from the bar's previously offset points.
 function GUF.AnchorCastBar(entry, bar, position)
-    position = position or GUF.db.frames[entry.unit].bars.cast.position
+    position = position or GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast.position
     bar:ClearAllPoints()
     bar:SetPoint(position.point, entry.frame, position.relativePoint, position.x, position.y)
     bar.goodUnitFramesComboCastOffset = 0
@@ -138,18 +142,29 @@ function GUF.FrameRectInUnit(entry, region, geometry)
     return anchoredRect(entry, region, rootScale, {}, 0, geometry)
 end
 
+-- Native Player casts can use an owned icon while native look rules hide the
+-- original. Live avoidance must measure the displayed region; specimens keep
+-- their own icon. A released view immediately returns to native discovery.
+function GUF.CastIconRegion(entry, bar)
+    local state = entry.nativeCastStyle
+    if not entry.configurationPreview and state and state.active and state.bar == bar and state.displayIcon then
+        return state.displayIcon
+    end
+    local prefix = bar:GetName()
+    return bar.Icon or bar.icon or prefix and _G[prefix .. "Icon"]
+end
+
 -- Cache only the last applied public position, for restricted native rectangles.
 function GUF.CacheCastAuraGeometry(entry, bar, width, height)
     local root = GUF.FrameRectInUnit(entry, entry.frame)
     local scale, rootScale = bar:GetEffectiveScale(), entry.frame:GetEffectiveScale()
     if not root or not number(width) or not number(height) or not number(scale) or not number(rootScale)
         or width <= 0 or height <= 0 or scale <= 0 or rootScale <= 0 then return end
-    local position = GUF.db.frames[entry.unit].bars.cast.position
+    local position = GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast.position
     local ratio = scale / rootScale
     local left = root.right * horizontalPoint[position.relativePoint] + position.x * ratio - width * ratio * horizontalPoint[position.point]
     local bottom = root.top * verticalPoint[position.relativePoint] + position.y * ratio - height * ratio * verticalPoint[position.point]
-    local state = entry.artisticLayout
-    local inset = state and state.active and state.castBorderInset or 2 * ratio
+    local inset = GUF.Presentation.Role(entry, "castInset") or 2 * ratio
     local horizontal, above, below = inset, inset, inset
     if bar.goodUnitFramesOwned and not bar.nativeCastPresentation and bar.castBorderPadding then
         horizontal, above, below = bar.castBorderPadding.x * ratio,
@@ -158,9 +173,8 @@ function GUF.CacheCastAuraGeometry(entry, bar, width, height)
     bar.goodUnitFramesCastBounds = { left = left - horizontal, bottom = bottom - below,
         right = left + width * ratio + horizontal, top = bottom + height * ratio + above }
     bar.goodUnitFramesCastIconBounds = nil
-    local cfg = GUF.db.frames[entry.unit].bars.cast
-    local prefix = bar:GetName()
-    local icon = bar.Icon or bar.icon or prefix and _G[prefix .. "Icon"]
+    local cfg = GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast
+    local icon = GUF.CastIconRegion(entry, bar)
     if icon and (cfg.icon == "LEFT" or cfg.icon == "RIGHT") then
         local iconWidth, iconHeight = icon:GetSize()
         local iconScale = icon:GetEffectiveScale()
@@ -184,11 +198,11 @@ end
 -- owned cast intersects it, move only that cosmetic cast beneath the row.
 function GUF.AdjustTargetComboCast(entry)
     if entry.unit ~= "target" and not (entry.unit == "player" and entry.comboRow and entry.comboRow.integrated) then return end
-    local bar, row, state = entry.castBar, entry.comboRow, entry.artisticLayout
+    local bar, row = entry.castBar, entry.comboRow
     if not bar or not bar.goodUnitFramesOwned or bar.nativeCastPresentation then return end
     local offset = 0
     local bounds = bar.goodUnitFramesCastBounds
-    if bounds and row and row.integrated and row.displayed and state and state.active then
+    if bounds and row and row.integrated and row.displayed and GUF.Presentation.Role(entry, "resources") then
         local shown = bar:IsShown()
         local combo = GUF.ComboAuraBounds(entry)
         local rect = unionRect(bounds, bar.goodUnitFramesCastIconBounds)
@@ -201,11 +215,11 @@ function GUF.AdjustTargetComboCast(entry)
     if (bar.goodUnitFramesComboCastOffset or 0) == offset then return end
     if not entry.configurationPreview and (GUF.Restricted() or GUF.editing) then
         local protected = bar:IsProtected()
-        if GUF.editing or GUF.Secret(protected) or protected then GUF.pending = true; return end
+        if GUF.editing or GUF.Secret(protected) or protected then GUF.DeferRuntime("cast-aura-restricted"); return end
     end
     local scale, rootScale = bar:GetEffectiveScale(), entry.frame:GetEffectiveScale()
     if not number(scale) or not number(rootScale) or scale <= 0 or rootScale <= 0 then return end
-    local position = GUF.PresentationFrameSettings(entry).bars.cast.position
+    local position = GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast.position
     bar:ClearAllPoints()
     bar:SetPoint(position.point, entry.frame, position.relativePoint, position.x, position.y + offset * rootScale / scale)
     bar.goodUnitFramesComboCastOffset = offset
@@ -218,13 +232,13 @@ local function shiftedCastRect(bar, rect)
 end
 
 function GUF.CastAuraBounds(entry)
-    local cfg = GUF.db.frames[entry.unit].bars.cast
+    local cfg = GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast
     if not cfg.enabled and not (entry.optionsPreview and entry.previewCasting) then return end
     local sample = entry.configurationPreview
     local nativeDisplay = nativeCastBar(entry)
     local bar = sample and entry.castBar or GUF.UsesNativeCastBar(entry) and nativeDisplay or entry.castBar
     if not bar or (bar.IsForbidden and bar:IsForbidden()) then return end
-    if not sample and GUF.UsesNativeCastBar(entry) and (entry.unit == "player" or entry.unit == "pet") and GUF.db.hideBlizzard.cast then return end
+    if not sample and GUF.UsesNativeCastBar(entry) and (entry.unit == "player" or entry.unit == "pet") and GUF.Runtime.Settings("cast", entry).hideBlizzard.cast then return end
     local shown = bar:IsShown()
     if GUF.Secret(shown) or not shown then return end
     local prefix = bar:GetName()
@@ -233,31 +247,33 @@ function GUF.CastAuraBounds(entry)
     local region = not GUF.Secret(borderShown) and borderShown and border or bar
     local rect = GUF.FrameRectInUnit(entry, region) or shiftedCastRect(bar, bar.goodUnitFramesCastBounds)
     if not rect then return end
-    local icon = bar.Icon or bar.icon or prefix and _G[prefix .. "Icon"]
+    local icon = GUF.CastIconRegion(entry, bar)
     if cfg.icon ~= "HIDE" and icon then
         local iconShown = icon:IsShown()
         if not GUF.Secret(iconShown) and iconShown then
             rect = unionRect(rect, GUF.FrameRectInUnit(entry, icon) or shiftedCastRect(bar, bar.goodUnitFramesCastIconBounds))
         end
     end
-    local state = entry.artisticLayout
-    local gap = 6 * (state and (state.active or sample) and state.scale or 1)
+    local gap = GUF.Presentation.Role(entry, "featureGap") or 6
     return { left = rect.left - gap, bottom = rect.bottom - gap, right = rect.right + gap, top = rect.top + gap }
 end
 
 local castAuraPending = {}
-local castAuraDriver = CreateFrame("Frame")
+local castAuraDriver = GUF.Runtime.CreateFrame("Frame")
 castAuraDriver:Hide()
 local function queueCastAuras(entry)
-    castAuraPending[entry] = true
+    if entry.configurationPreview then return end
+    castAuraPending[entry] = { cast = GUF.Runtime.Binding("cast", entry), auras = GUF.Runtime.Binding("auras", entry),
+        layout = GUF.Runtime.Binding("layout", entry) }
     castAuraDriver:Show()
 end
 GUF.QueueCastAuraPositions = queueCastAuras
 castAuraDriver:SetScript("OnUpdate", function()
     castAuraDriver:Hide()
-    for entry in pairs(castAuraPending) do
+    for entry, token in pairs(castAuraPending) do
         castAuraPending[entry] = nil
-        if GUF.RefreshCastAuraPositions then GUF.RefreshCastAuraPositions(entry) end
+        if GUF.Runtime.IsBinding(token.cast, "cast", entry) and GUF.Runtime.IsBinding(token.auras, "auras", entry)
+            and GUF.Runtime.IsBinding(token.layout, "layout", entry) then GUF.RefreshCastAuraPositions(entry) end
     end
 end)
 
@@ -269,12 +285,14 @@ local function watchNativeCastBar(entry)
         entry.castAuraHooks[bar] = true
         local function refresh()
             if entry.nativeCastStyle and entry.nativeCastStyle.writing then return end
+            if GUF.RefreshNativeCastArtwork then GUF.RefreshNativeCastArtwork(entry, bar) end
             queueCastAuras(entry)
             if GUF.QueueNativeCastRefresh then GUF.QueueNativeCastRefresh(entry) end
         end
-        -- Observe native controllers; all resulting writes target owned aura proxies.
-        for _, script in ipairs({ "OnShow", "OnHide", "OnSizeChanged" }) do bar:HookScript(script, refresh) end
-        for _, method in ipairs({ "SetPoint", "SetScale", "SetParent" }) do hooksecurefunc(bar, method, refresh) end
+        -- Observe native lifecycle without replacing scripts. Refresh only
+        -- leased cast artwork, owned labels and owned aura proxies.
+        for _, script in ipairs({ "OnShow", "OnHide", "OnSizeChanged" }) do GUF.NativeProperties.HookScript("CastBar:script:1", bar, script, refresh) end
+        for _, method in ipairs({ "SetPoint", "SetScale", "SetParent" }) do GUF.NativeProperties.Hook("CastBar:1", bar, method, refresh) end
     end
     return bar
 end
@@ -314,7 +332,7 @@ local function updateEmpowerStages(bar, fractions)
     if same and bar.empowerWidth == width and bar.empowerHeight == height and bar.empowerScale == scale then return end
     if GUF.Restricted() then
         local protected = bar:IsProtected()
-        if GUF.Secret(protected) or protected then GUF.pending = true; clearEmpowerStages(bar); return end
+        if GUF.Secret(protected) or protected then GUF.DeferRuntime("cast-empower-restricted"); clearEmpowerStages(bar); return end
     end
     local offset = 0
     for i, stage in ipairs(bar.empowerStages) do
@@ -348,7 +366,7 @@ local function clearCast(entry)
 end
 
 local function updateTime(entry)
-    local bar, cfg = entry.castBar, GUF.db.frames[entry.unit].bars.cast
+    local bar, cfg = entry.castBar, GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast
     if bar.duration then
         if cfg.time.enabled then bar.time:SetFormattedText("%.1f", bar.duration:GetRemainingDuration()) end
     elseif bar.startTime then
@@ -360,7 +378,7 @@ local function updateTime(entry)
 end
 
 local function updateCast(entry)
-    local bar, root = entry.castBar, GUF.db.frames[entry.unit]
+    local bar, root = entry.castBar, GUF.Runtime.Settings("cast", entry).frames[entry.unit]
     if GUF.UsesNativeCastBar(entry) or not root.bars.cast.enabled then clearCast(entry); return end
     local cfg, unit = root.bars.cast, entry.frame.unit or entry.unit
     if not UnitExists(unit) then clearCast(entry); return end
@@ -451,7 +469,7 @@ end
 
 -- Artwork-only factory shared with public specimens; no unit events or timers.
 function GUF.CreateCastBarPresentation(parent)
-    local bar = CreateFrame("StatusBar", nil, parent)
+    local bar = GUF.Runtime.CreateFrame("StatusBar", nil, parent)
     bar.goodUnitFramesOwned = true
     bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
     bar:SetHeight(16)
@@ -539,7 +557,7 @@ function GUF.CopyNativeCastPresentation(entry, bar)
 end
 
 function GUF.StyleNativeCastSpecimen(entry, options)
-    local cfg, bar = GUF.db.frames[entry.unit].bars.cast, entry.castBar
+    local cfg, bar = GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast, entry.castBar
     local width, height = GUF.CastBarDimensions(entry.unit)
     bar:SetSize(width, height); bar.layoutHeight = height
     bar:SetScale(1)
@@ -551,7 +569,7 @@ function GUF.StyleNativeCastSpecimen(entry, options)
             ancestor = ancestor:GetParent()
         end
         local effective = source:GetEffectiveScale()
-        local denominator = inherits and live.frame:GetEffectiveScale() or GUF.db.frames[entry.unit].scale * UIParent:GetEffectiveScale()
+        local denominator = inherits and live.frame:GetEffectiveScale() or GUF.Runtime.Settings("cast", entry).frames[entry.unit].scale * UIParent:GetEffectiveScale()
         if number(effective) and number(denominator) and denominator > 0 then bar:SetScale(effective / denominator) end
     end
     GUF.AnchorCastBar(entry, bar)
@@ -563,8 +581,8 @@ function GUF.StyleNativeCastSpecimen(entry, options)
 end
 
 function GUF.PositionCastIcon(entry, bar, icon)
-    local cfg = GUF.db.frames[entry.unit].bars.cast
-    local gap = GUF.db.general.frameStyle == "blizzard" and 4 or 3
+    local cfg = GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast
+    local gap = GUF.Runtime.Settings("cast", entry).general.frameStyle == "blizzard" and 4 or 3
     bar.icon:ClearAllPoints()
     bar.icon:SetPoint(cfg.icon == "RIGHT" and "LEFT" or "RIGHT", bar,
         cfg.icon == "RIGHT" and "RIGHT" or "LEFT", cfg.icon == "RIGHT" and gap or -gap, 0)
@@ -580,9 +598,9 @@ local function createCastBar(entry)
     local function auraClearance()
         if GUF.RefreshCastAuraPositions then GUF.RefreshCastAuraPositions(entry) end
     end
-    bar:HookScript("OnShow", auraClearance)
-    bar:HookScript("OnHide", auraClearance)
-    local events = CreateFrame("Frame")
+    GUF.NativeProperties.HookScript("CastBar:script:2", bar, "OnShow", auraClearance)
+    GUF.NativeProperties.HookScript("CastBar:script:3", bar, "OnHide", auraClearance)
+    local events = GUF.Runtime.CreateFrame("Frame")
     bar.events = events
     for _, event in ipairs({ "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_FAILED",
         "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_DELAYED", "UNIT_SPELLCAST_CHANNEL_START",
@@ -592,29 +610,32 @@ local function createCastBar(entry)
     for _, event in ipairs({ "PLAYER_TARGET_CHANGED", "UNIT_TARGET", "UNIT_PET", "PLAYER_ENTERING_WORLD" }) do
         events:RegisterEvent(event)
     end
-    events:SetScript("OnEvent", function() updateCast(entry) end)
-    -- Poll the displayed unit too: Target of Target has no native casting-bar controller.
-    local elapsed = 0
-    events:SetScript("OnUpdate", function(_, delta)
-        if not bar.managed then return end
-        elapsed = elapsed + delta
-        if elapsed >= .1 then elapsed = 0; updateCast(entry) end
-        if bar:IsShown() then updateTime(entry) end
+    events:SetScript("OnEvent", function()
+        if not bar.managed or entry.castBar ~= bar or not GUF.Runtime.IsBinding(bar.runtimeBinding, "cast", entry) then return end
+        if GUF.RefreshNativeCastArtwork then GUF.RefreshNativeCastArtwork(entry) end
+        GUF.Runtime.Refresh(entry, "cast", updateCast, entry)
     end)
+    -- Player/Target cast events wake the owned view immediately. Only a visible
+    -- cast needs timing/metadata fallback polling; dormant units have no driver.
+    local elapsed = 0
+    bar:SetScript("OnUpdate", function(_, delta)
+        if not bar.managed or entry.castBar ~= bar or not GUF.Runtime.IsBinding(bar.runtimeBinding, "cast", entry) then return end
+        elapsed = elapsed + delta
+        if elapsed >= .1 then elapsed = 0; GUF.Runtime.Refresh(entry, "cast", updateCast, entry) end
+        if bar:IsShown() then GUF.Runtime.Refresh(entry, "cast", updateTime, entry) end
+    end)
+    bar.created = true
+    GUF.Runtime.Constructed()
     return bar
 end
 
 function GUF.PositionCastBar(entry)
     local bar = entry.castBar
     if not bar then return end
-    local state = entry.artisticLayout
-    local anchor = state and state.active and state.noPower and entry.health or entry.power or entry.health or entry.frame
-    if state and state.active then
-        anchor = state.fullWidthCast or state.castAreas[state.noPower and "health" or "power"] or anchor
-    end
+    local anchor = GUF.Presentation.Role(entry, "castAnchor") or entry.frame
     if GUF.Restricted() then
         local ok, protected = pcall(bar.IsProtected, bar)
-        if not ok or GUF.Secret(protected) or protected then GUF.pending = true; return bar.anchorRegion or anchor end
+        if not ok or GUF.Secret(protected) or protected then GUF.DeferRuntime("cast-position-restricted"); return bar.anchorRegion or anchor end
     end
     local width, height = GUF.CastBarDimensions(entry.unit)
     bar:SetSize(width, height); bar.layoutHeight = height
@@ -626,27 +647,28 @@ function GUF.PositionCastBar(entry)
 end
 
 function GUF.ApplyCastBar(entry)
-    local root, bar = GUF.db.frames[entry.unit], entry.castBar
+    local root, bar = GUF.Runtime.Settings("cast", entry).frames[entry.unit], entry.castBar
     local native = watchNativeCastBar(entry)
     queueCastAuras(entry)
     if GUF.UsesNativeCastBar(entry) then
+        local status, reason = GUF.SetNativeCastArtworkHidden(entry, native, false)
+        if status ~= "released" then return status, reason end
         if bar then bar.managed = false; clearCast(entry) end
-        GUF.ApplyNativeCastBar(entry)
-        return
+        return GUF.ApplyNativeCastBar(entry)
     end
     GUF.ReleaseNativeCastBar(entry)
-    bar = bar or createCastBar(entry)
+    bar = bar and bar.created and bar or createCastBar(entry)
+    bar.runtimeBinding = GUF.Runtime.Binding("cast", entry)
     bar.managed = true
-    if native then
-        -- The separate player bar is hidden only by Hide Blizzard > Cast.
-        -- Target's attached source is replaced only while its addon cast is on.
-        local replacingTarget = entry.unit ~= "player" and root.bars.cast.enabled
-        GUF.RegionAlpha(native, replacingTarget and 0 or nil)
-    end
-    GUF.StyleCastBarPresentation(bar, entry.artisticLayout, bar.channel)
+    -- Keep the separate Player bar under Hide Blizzard > Cast. Only Target's
+    -- native artwork is replaced here; its controller must retain native alpha
+    -- so a cast that ends during layout handoff can still finish and fade.
+    local status, reason = GUF.SetNativeCastArtworkHidden(entry, native, entry.unit == "target" and root.bars.cast.enabled)
+    if status == "deferred" then return status, reason end
+    GUF.StyleCastBarPresentation(bar, GUF.Presentation.Role(entry, "castStyle"), bar.channel)
     GUF.PositionCastBar(entry)
     local icon
-    if GUF.db.general.frameStyle == "blizzard" then
+    if GUF.Runtime.Settings("cast", entry).general.frameStyle == "blizzard" then
         local text
         text, icon = GUF.CopyNativeCastPresentation(entry, bar)
     end
@@ -660,7 +682,7 @@ function GUF.ApplyCastBar(entry)
             GUF.LayoutCastLabels(entry, bar, bar.name, bar.time, GUF.CastSourceText(entry))
         end
         for _, region in pairs({ entry.health, entry.power }) do
-            if region.HookScript then region:HookScript("OnSizeChanged", resized) end
+            if region.HookScript then GUF.NativeProperties.HookScript("CastBar:script:4", region, "OnSizeChanged", resized) end
         end
         bar.sizeHooked = true
     end

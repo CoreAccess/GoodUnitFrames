@@ -12,11 +12,7 @@ local valueHelp = {
 
 -- Callback controls belong to the current cached page generation only.
 local function guarded(window, callback)
-    local profile, generation, content = GUF.db, window.buildGeneration, window.content
-    return function(...)
-        if GUF.db ~= profile or window.buildGeneration ~= generation or window.content ~= content or not content:IsShown() then return end
-        return callback(...)
-    end
+    return UI.Guard(UI.PageLease(window, window.content), callback)
 end
 
 local function checklistRow(builder, window, items, selected, toggle, controls)

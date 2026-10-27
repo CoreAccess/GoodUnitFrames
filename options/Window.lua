@@ -77,6 +77,7 @@ function GUF.BuildOptions(unit, page)
     local window = GUF.options
     if not window then return end
     window.buildingOptions = true; window.refreshFrameScale = nil
+    if window.confirmation then window.confirmation:Hide() end
     window.buildGeneration = (window.buildGeneration or 0) + 1
     if unit and not GUF.IsManagedUnit(unit) then unit = "player" end
     window.unit = unit or window.unit or "player"
@@ -133,11 +134,9 @@ local function reset(window)
         if page == "profiles" then GUF.ResetCurrentProfile(); return end
         if page == "hideBlizzard" then GUF.db.hideBlizzard = GUF.Copy(GUF.GetLayoutDefaults(GUF.db.general.frameStyle).hideBlizzard)
         else
-            local defaults = GUF.GetLayoutDefaults(GUF.db.general.frameStyle)
-            GUF.db.frames[unit] = GUF.Copy(defaults.frames[unit])
-            if unit == "target" then GUF.db.threat = GUF.Copy(defaults.threat) end
+            GUF.Settings.ResetUnit(GUF.db, unit)
         end
-        GUF.RequestApply(); GUF.BuildOptions()
+        GUF.RequestApply(nil, nil, "reset"); GUF.BuildOptions()
     end)
 end
 
@@ -232,11 +231,12 @@ function GUF.CreateOptions()
     close:SetPoint("BOTTOMRIGHT", -24, 14)
     window.layoutLabel:SetPoint("RIGHT", close, "LEFT", -16, 0)
     window:SetScript("OnHide", function()
-        stopDragging(); UI.CancelControlFocus(window)
+        stopDragging()
+        window.controlSession = (window.controlSession or 0) + 1
+        UI.CancelControlFocus(window)
         window.panelScale.Stop()
         if window.confirmation then window.confirmation:Hide() end
-        if GUF.configurationUnlocked then GUF.SetConfigurationMode(false) end
-        GUF.SetFrameMovers(false)
+        GUF.SetMovers(false)
         if GUF.optionsPreviewEntry then GUF.optionsPreviewEntry.frame:Hide() end
         GUF.optionsPreviewEntry = nil
     end)

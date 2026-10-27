@@ -10,7 +10,7 @@ end
 -- Resolve the automatic size from public configuration, before Scale. The UI
 -- shows this same value instead of exposing the legacy zero sentinel.
 function GUF.PortraitIndicatorSize(unit, kind, config)
-    local cfg = config or GUF.db.frames[unit]
+    local cfg = config or GUF.Runtime.Settings("layout", unit).frames[unit]
     local size = cfg.indicators[kind].size
     if type(size) == "number" and size > 0 and size < math.huge then return size end
     if cfg.design and cfg.design.layered and cfg.design.layered.enabled then
@@ -28,7 +28,7 @@ end
 
 function GUF.LayeredOrbitAngle(unit, kind, entry)
     if kind == "level" then return unit == "target" and 315 or 225 end
-    local cfg = (entry and GUF.PresentationFrameSettings(entry) or GUF.db.frames[unit]).design.layered
+    local cfg = (entry and GUF.PresentationFrameSettings(entry) or GUF.Runtime.Settings("layout", unit).frames[unit]).design.layered
     local angle = cfg.angles[kind]
     if type(angle) == "number" and angle == angle and math.abs(angle) ~= math.huge then return math.max(0, math.min(360, angle)) end
     angle = orbitAngles[kind] or 90
@@ -37,9 +37,9 @@ end
 
 function GUF.LayeredDesignSettings(unit, entry)
     if unit ~= "player" and unit ~= "target" then return end
-    local cfg = entry and GUF.PresentationFrameSettings(entry) or GUF.db and GUF.db.frames[unit]
+    local cfg = entry and GUF.PresentationFrameSettings(entry) or GUF.db and GUF.Runtime.Settings("layout", unit).frames[unit]
     local settings = cfg and cfg.design and cfg.design.layered
-    local style = entry and entry.configurationPreview and entry.presentationStyle or GUF.db and GUF.db.general.frameStyle
+    local style = entry and entry.configurationPreview and entry.presentationStyle or GUF.db and GUF.Runtime.Settings("layout", entry or unit).general.frameStyle
     if style == "artistic" and settings and settings.enabled then return settings end
 end
 
@@ -234,7 +234,7 @@ function GUF.LayoutLayeredDesign(entry, sampleLevel)
     GUF.LayoutCreatureRank(entry)
     local layer = state.layered
     if not layer then
-        if not entry.configurationPreview and (GUF.Restricted() or GUF.editing) then GUF.pending = true; return true end
+        if not entry.configurationPreview and (GUF.Restricted() or GUF.editing) then GUF.DeferRuntime("native-readiness"); return true end
         layer = { level = GUF.CreateArtisticBadge(state.rim) }
         -- The skull needs the same foreground parent as the digits; native
         -- fallback Level chrome has an opaque face above the rim itself.

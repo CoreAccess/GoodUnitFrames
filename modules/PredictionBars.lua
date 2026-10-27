@@ -1,4 +1,8 @@
 local _, GUF = ...
+
+local function leaseAlpha(region, value, relative)
+    return GUF.RegionAlpha(region, value, relative, "PredictionBars")
+end
 local unpack = unpack or table.unpack
 local kinds = { "incAbsorb", "incHeal", "healAbsorb" }
 local nativeKeys = { "MyHealPredictionBar", "OtherHealPredictionBar", "HealAbsorbBar", "TotalAbsorbBar",
@@ -34,7 +38,7 @@ local function healthAlphas(unit, maximum)
 end
 
 local function createBar(parent)
-    local bar = CreateFrame("StatusBar", nil, parent)
+    local bar = GUF.Runtime.CreateFrame("StatusBar", nil, parent)
     bar.goodUnitFramesOwned = true
     bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
     bar:GetStatusBarTexture():SetDrawLayer("ARTWORK")
@@ -43,7 +47,7 @@ local function createBar(parent)
 end
 
 local function createClip(parent)
-    local clip = CreateFrame("Frame", nil, parent)
+    local clip = GUF.Runtime.CreateFrame("Frame", nil, parent)
     clip.goodUnitFramesOwned = true
     clip:SetClipsChildren(true)
     return clip
@@ -107,14 +111,31 @@ end
 local function applyMasks(bar, sources)
     local fill = bar:GetStatusBarTexture()
     local records = bar.goodUnitFramesPredictionMasks or {}
-    bar.goodUnitFramesPredictionMasks = records
+    local free = bar.goodUnitFramesPredictionMaskPool or {}
+    bar.goodUnitFramesPredictionMasks, bar.goodUnitFramesPredictionMaskPool = records, free
+    -- Recycle owned copies; do not keep an allocation keyed by every native
+    -- mask reference that has ever appeared. Unreadable is still not removed.
+    for source, record in pairs(records) do
+        if sources[source] == nil then
+            if record.target then record.target:RemoveMaskTexture(record.mask) end
+            record.target, record.presentation = nil, nil
+            record.mask:ClearAllPoints()
+            records[source] = nil
+            free[#free + 1] = record
+        end
+    end
     for source, presentation in pairs(sources) do
         local record = records[source]
         if presentation ~= false then
             if not record then
-                local mask = bar:CreateMaskTexture(nil, "ARTWORK")
-                mask.goodUnitFramesOwned = true
-                record = { mask = mask }; records[source] = record
+                record = table.remove(free)
+                if not record then
+                    local mask = bar:CreateMaskTexture(nil, "ARTWORK")
+                    mask.goodUnitFramesOwned = true
+                    record = { mask = mask }
+                    GUF.Updates.stats.maskCreated = (GUF.Updates.stats.maskCreated or 0) + 1
+                end
+                records[source] = record
             end
             if not sameMask(record.presentation, presentation) then
                 record.mask:SetTexture(presentation.file, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE", "LINEAR")
@@ -124,15 +145,10 @@ local function applyMasks(bar, sources)
                 for _, point in ipairs(presentation.points) do record.mask:SetPoint(unpack(point)) end
                 record.presentation = presentation
             end
-            if record.target ~= fill then
-                if record.target then record.target:RemoveMaskTexture(record.mask) end
-                fill:AddMaskTexture(record.mask); record.target = fill
-            end
         end
-    end
-    for source, record in pairs(records) do
-        if sources[source] == nil and record.target then
-            record.target:RemoveMaskTexture(record.mask); record.target = nil
+        if record and record.presentation and record.target ~= fill then
+            if record.target then record.target:RemoveMaskTexture(record.mask) end
+            fill:AddMaskTexture(record.mask); record.target = fill
         end
     end
 end
@@ -165,7 +181,7 @@ local function createPrediction(entry)
     local state = { bars = {}, native = {} }
     entry.predictions = state
     local health = GUF.ArtisticBarHost(entry, "health")
-    state.textLayer = CreateFrame("Frame", nil, health ~= entry.health and entry.frame or entry.health)
+    state.textLayer = GUF.Runtime.CreateFrame("Frame", nil, health ~= entry.health and entry.frame or entry.health)
     state.textLayer.goodUnitFramesOwned = true
     state.textLayer:SetAllPoints(GUF.ArtisticBarHost(entry, "health"))
     state.textHost = health
@@ -182,9 +198,11 @@ local function createPrediction(entry)
         end
         state.bars[kind] = item
     end
-    entry.health:HookScript("OnSizeChanged", function() state.dirty = true end)
-    hooksecurefunc(entry.health, "SetStatusBarTexture", function() state.dirty = true end)
-    hooksecurefunc(entry.health, "SetFrameLevel", function() state.dirty = true end)
+    GUF.NativeProperties.HookScript("PredictionBars:script:1", entry.health, "OnSizeChanged", function() state.dirty = true end)
+    GUF.NativeProperties.Hook("PredictionBars:1", entry.health, "SetStatusBarTexture", function() state.dirty = true end)
+    GUF.NativeProperties.Hook("PredictionBars:2", entry.health, "SetFrameLevel", function() state.dirty = true end)
+    state.created = true
+    GUF.Runtime.Constructed()
     return state
 end
 
@@ -195,7 +213,7 @@ function GUF.LayerHealthText(entry, text)
     local parent = state.textLayer
     if not parent or current == parent then return end
     -- Parent changes are applied with the rest of the options outside combat.
-    if GUF.Restricted() then GUF.pending = true; return end
+    if GUF.Restricted() then GUF.DeferRuntime("native-readiness"); return end
     text:SetParent(parent)
 end
 
@@ -208,7 +226,7 @@ local function layout(entry)
     local parent = health ~= entry.health and entry.frame or entry.health
     local changedHost = state.textHost ~= health or state.textLayer:GetParent() ~= parent
     if changedHost then
-        if GUF.Restricted() or GUF.editing then GUF.pending = true; return false end
+        if GUF.Restricted() or GUF.editing then GUF.DeferRuntime("native-readiness"); return false end
         state.textLayer:SetParent(parent)
         -- Follow the renderer through engine anchors, without reading its
         -- possibly opaque dimensions. Prediction sizing may defer separately.
@@ -219,7 +237,7 @@ local function layout(entry)
     -- SetParent can reset inherited ordering during a layout switch. The
     -- final text level must be assigned after its parent has been reconciled.
     if changedHost or state.textStrata ~= strata or state.textLevel ~= level then
-        if GUF.Restricted() or GUF.editing then GUF.pending = true; return false end
+        if GUF.Restricted() or GUF.editing then GUF.DeferRuntime("native-readiness"); return false end
         state.textLayer:SetFrameStrata(strata)
         state.textLayer:SetFrameLevel(level + #kinds + 1)
         state.textStrata, state.textLevel = strata, level
@@ -231,7 +249,7 @@ local function layout(entry)
     local reverse = health:GetReverseFill()
     if GUF.Secret(reverse) then return false end
     for i, kind in ipairs(kinds) do
-        local cfg, item = GUF.db.frames[entry.unit].bars[kind], state.bars[kind]
+        local cfg, item = GUF.Runtime.Settings("predictions", entry).frames[entry.unit].bars[kind], state.bars[kind]
         local bar, clip = item.bar, item.clip
         local overlay = kind == "healAbsorb"
         -- Prediction frames must sit above the native fill, not share its
@@ -287,6 +305,8 @@ end
 function GUF.UpdatePredictionBars(entry)
     local state = entry.predictions
     if not state then return end
+    local shown = entry.frame:IsVisible()
+    if not GUF.Secret(shown) and not shown then state.dirty = true; return end
     local unit = entry.frame.unit or entry.unit
     if not UnitExists(unit) then hideBars(state); return end
     local health = GUF.ArtisticBarHost(entry, "health")
@@ -296,6 +316,8 @@ function GUF.UpdatePredictionBars(entry)
     -- Native primary masks can settle/change independently of Health media.
     -- Keep all three overlays, including the full-health shield, in that shape.
     refreshMasks(state, health)
+    local bars = GUF.Runtime.Settings("predictions", entry).frames[entry.unit].bars
+    if not bars.incHeal.enabled and not bars.incAbsorb.enabled and not bars.healAbsorb.enabled then hideBars(state); return end
     local calc, amounts, maximum = state.calc, {}, UnitHealthMax(unit)
     if calc and UnitGetDetailedHealPrediction and pcall(UnitGetDetailedHealPrediction, unit, "player", calc) then
         maximum = calc:GetMaximumHealth()
@@ -313,7 +335,7 @@ function GUF.UpdatePredictionBars(entry)
     end
     local full, missing = healthAlphas(unit, maximum)
     for _, kind in ipairs(kinds) do
-        local cfg, item, amount = GUF.db.frames[entry.unit].bars[kind], state.bars[kind], amounts[kind]
+        local cfg, item, amount = GUF.Runtime.Settings("predictions", entry).frames[entry.unit].bars[kind], state.bars[kind], amounts[kind]
         local visible = cfg.enabled
         if not GUF.Secret(amount) then visible = visible and amount > 0 end
         if not GUF.Secret(maximum) then visible = visible and maximum > 0 end
@@ -344,7 +366,8 @@ end
 
 function GUF.ApplyPredictionBars(entry)
     if not entry.health then return end
-    local state = entry.predictions or createPrediction(entry)
+    local state = entry.predictions
+    if not state or not state.created then state = createPrediction(entry) end
     state.dirty = true
     for _, owner in ipairs({ entry.health, entry.healthArea, entry.frame }) do
         for _, key in ipairs(nativeKeys) do
@@ -354,10 +377,10 @@ function GUF.ApplyPredictionBars(entry)
     end
     -- Individual Show options own visibility. Keep Blizzard's duplicate artwork
     -- suppressed even when all three addon overlays are turned off.
-    for region in pairs(state.native) do GUF.RegionAlpha(region, 0) end
+    for region in pairs(state.native) do leaseAlpha(region, 0) end
     GUF.UpdatePredictionBars(entry)
     if not state.events then
-        state.events = CreateFrame("Frame")
+        state.events = GUF.Runtime.CreateFrame("Frame", nil, entry.frame)
         for _, event in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_HEAL_PREDICTION",
             "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED" }) do
             state.events:RegisterUnitEvent(event, entry.unit)
@@ -366,6 +389,7 @@ function GUF.ApplyPredictionBars(entry)
             state.events:RegisterEvent(event)
         end
         state.events:SetScript("OnEvent", function() GUF.UpdatePredictionBars(entry) end)
+        state.events:SetScript("OnShow", function() state.dirty = true; GUF.UpdatePredictionBars(entry) end)
         local elapsed = 0
         state.events:SetScript("OnUpdate", function(_, delta)
             elapsed = elapsed + delta
@@ -375,3 +399,52 @@ function GUF.ApplyPredictionBars(entry)
         end)
     end
 end
+
+-- Synthetic amounts share the live prediction media policy, never its data channel.
+function GUF.RenderPredictionSample(entry, cfg, health, showAll, selected)
+    entry.predictionSamples = entry.predictionSamples or {}
+    local width, height = entry.health:GetWidth(), entry.health:GetHeight()
+    local current = width * health / 100
+    local index = 0
+    for _, key in ipairs({ "incHeal", "incAbsorb", "healAbsorb" }) do
+        index = index + 1
+        local settings = cfg.bars[key]
+        local bar = entry.predictionSamples[key]
+        if not bar then
+            local clip = CreateFrame("Frame", nil, entry.health)
+            clip.goodUnitFramesOwned = true
+            clip:SetClipsChildren(true)
+            bar = CreateFrame("StatusBar", nil, clip)
+            bar.sampleClip = clip
+            bar.goodUnitFramesOwned = true
+            entry.predictionSamples[key] = bar
+        end
+        local clip = bar.sampleClip
+        clip:SetFrameLevel(entry.health:GetFrameLevel() + index)
+        bar:SetFrameLevel(entry.health:GetFrameLevel() + index)
+        local full = key == "incAbsorb" and health >= 100
+        local overlay = key == "healAbsorb" or full
+        local length = math.min(width * .20, overlay and current or width - current)
+        clip:ClearAllPoints(); clip:SetPoint("TOPLEFT", entry.health, "TOPLEFT", overlay and current - length or current, 0)
+        clip:SetSize(math.max(1, length), height)
+        -- Keep the Health artwork's full geometry/UV span; clip only the
+        -- synthetic prediction amount, rather than stretching a short bar.
+        bar:ClearAllPoints(); bar:SetPoint("TOPLEFT", entry.health, "TOPLEFT")
+        bar:SetSize(width, height); bar:SetMinMaxValues(0, 1); bar:SetValue(1)
+        GUF.StylePredictionBar(bar, settings, entry.health)
+        local presentation, native = entry.blizzardPresentation, GUF.frames[entry.unit]
+        if presentation and native and native.health then
+            presentation.applyFillMasks("health", native.health, bar:GetStatusBarTexture(), key)
+        end
+        clip:SetShown((selected == key or showAll) and (settings.enabled or showAll) and length > 0 and (not full or settings.showAtFullHealth or showAll))
+        bar:Show()
+        bar:SetAlpha(settings.enabled and 1 or .25)
+    end
+    -- Keep the specimen's labels above all prediction fills, just like the live frame.
+    entry.textLayer = entry.textLayer or CreateFrame("Frame", nil, entry.health)
+    entry.textLayer.goodUnitFramesOwned = true
+    entry.textLayer:SetFrameLevel(entry.health:GetFrameLevel() + 5)
+    entry.healthText:SetParent(entry.textLayer)
+    for _, text in pairs(entry.healthSlots) do text:SetParent(entry.textLayer) end
+end
+

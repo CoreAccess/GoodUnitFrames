@@ -11,7 +11,7 @@ end
 
 -- Pure Artistic geometry shared by live frames and synthetic options specimens.
 function GUF.ArtisticPresentationGeometry(unit, liveUnit, config, portraitSource)
-    local cfg = config or GUF.db.frames[unit]
+    local cfg = config or GUF.Runtime.Settings("layout", unit).frames[unit]
     local scale = unit == "pet" and .78 or unit == "targettarget" and .62 or 1
     local width, height = GUF.ArtisticDimensions(unit, config)
     local reference = GUF.ArtisticBasePortraitWidth(unit, config)
@@ -50,6 +50,34 @@ function GUF.ArtisticPresentationGeometry(unit, liveUnit, config, portraitSource
     g.castRight = unit == "target" and px - reach + offset or barX + g.barWidth
     if unit == "player" then g.statusY = healthY - (healthRow + powerRow) / 2; g.castAnchorBottom = -height + 2 * scale end
     return g
+end
+
+-- Header chrome and readable name span have the same public geometry on
+-- live and sample surfaces. The caller retains native-write permission checks.
+function GUF.LayoutPresentationHeader(entry, state, cfg)
+    local scale = state.scale
+    local left = entry.unit == "target" and state.barX or state.px + state.barOffset
+    local right = entry.unit == "target" and state.px + state.barOffset or state.barX + state.barWidth
+    local height = state.headerTop - state.healthY
+    local textLeft, textRight = state.barX + 4 * scale, state.barX + state.barWidth - 4 * scale
+    state.nameStrip:ClearAllPoints()
+    state.nameStrip:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", left, state.headerTop)
+    state.nameStrip:SetSize(math.max(1, right - left), height)
+    state.nameStrip:LayoutHeader(math.max(1, right - left), height, entry.unit == "target", 6 * scale)
+    state.nameStrip:SetAlpha(cfg.artistic.nameBackgroundAlpha)
+    GUF.LayoutArtisticThreatName(entry)
+    state.nameArea:ClearAllPoints()
+    state.nameArea:SetPoint("TOPLEFT", state.nameStrip, "TOPLEFT", textLeft - left, 0)
+    state.nameArea:SetPoint("BOTTOMRIGHT", state.nameStrip, "BOTTOMRIGHT", textRight - right, 0)
+    state.nameTextWidth = math.max(1, state.barWidth - 16 * scale)
+    return height
+end
+
+function GUF.PresentationTextSize(cfg, kind, style)
+    local options = cfg.text[kind]
+    local size = options.custom and options.size or kind == "name" and cfg.nameSize or cfg.fontSize
+    if kind == "level" and style ~= "blizzard" then size = size * cfg.indicators.level.scale end
+    return size
 end
 
 -- One tint operation for live owned bars and public specimen bars.
@@ -101,7 +129,13 @@ end
 
 -- Public specimen identity/reaction, never the current live Target's identity.
 function GUF.PresentationFrameSettings(entry)
-    return entry.configurationPreview and entry.presentationConfig or GUF.db.frames[entry.unit]
+    return entry.configurationPreview and entry.presentationConfig or GUF.Runtime.Settings("layout", entry).frames[entry.unit]
+end
+
+-- Text fields can reconcile independently of geometry. Shared text helpers
+-- explicitly use the text binding even when called inside another live family.
+function GUF.TextFrameSettings(entry)
+    return entry.configurationPreview and entry.presentationConfig or GUF.Runtime.Settings("text", entry).frames[entry.unit]
 end
 
 function GUF.PreviewPlayerName()
@@ -127,7 +161,7 @@ function GUF.PreviewHealthColor(entry, subject, health, offline)
     if offline then return .5, .5, .5 end
     if cfg.healthColor == "static" then return unpack(cfg.customHealth) end
     if cfg.healthColor == "percent" then
-        return math.min(1, 2 * (1 - health / 100)), math.min(1, 2 * health / 100), 0
+        return GUF.HealthPercentColor(health / 100)
     end
     if subject ~= "player" and cfg.healthColor == "class" then
         if entry.unit == "pet" then return GUF.ClassColor("player") end
@@ -135,7 +169,8 @@ function GUF.PreviewHealthColor(entry, subject, health, offline)
         -- never read the currently selected live Target's reaction for a preview.
         return unpack(entry.unit == "target" and GUF.npcHealthColors.hostile or GUF.npcHealthColors.friendly)
     end
-    if subject ~= "player" or cfg.healthColor == "blizzard" then return 0, 1, 0 end
+    if cfg.healthColor == "blizzard" and entry.unit == "player" then return 0, 1, 0 end
+    if subject ~= "player" then return unpack(entry.unit == "target" and GUF.colors.hostile or GUF.colors.friendly) end
     return GUF.ClassColor("player")
 end
 

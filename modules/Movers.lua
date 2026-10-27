@@ -1,5 +1,9 @@
 local _, GUF = ...
 
+local function number(value)
+    return not GUF.Secret(value) and type(value) == "number" and value == value and math.abs(value) ~= math.huge
+end
+
 -- Temporary drag handles for positioning the existing Blizzard unit frames.
 local function backdrop(frame)
     frame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -32,37 +36,64 @@ function GUF.SetFrameMovers(enabled)
                 label:SetJustifyH("LEFT")
                 label:SetText(GUF.labels[unit])
                 mover:SetScript("OnDragStart", function(self)
-                    if InCombatLockdown() then return end
+                    if GUF.Restricted() or GUF.editing then return end
+                    local forbidden = entry.frame.IsForbidden and entry.frame:IsForbidden()
+                    if GUF.Secret(forbidden) or forbidden then return end
                     local cfg = GUF.db.frames[unit].position
                     local x, y = entry.frame:GetCenter()
-                    if not x then return end
-                    local scale = entry.frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
+                    local frameScale, screenScale = entry.frame:GetEffectiveScale(), UIParent:GetEffectiveScale()
+                    local cursorX, cursorY = GetCursorPosition()
+                    if not number(x) or not number(y) or not number(frameScale) or not number(screenScale)
+                        or not number(cursorX) or not number(cursorY) or frameScale <= 0 or screenScale <= 0 then return end
+                    local session = GUF.BeginFramePositionDrag(entry)
+                    if not session then return end
+                    self.positionSession = session
+                    local scale = frameScale / screenScale
                     cfg.enabled, cfg.point, cfg.anchorTo, cfg.relativePoint = true, "CENTER", "UIParent", "BOTTOMLEFT"
                     cfg.x, cfg.y = x * scale, y * scale
-                    GUF.ApplyPosition(entry)
-                    self.dragStart = { GetCursorPosition() }
+                    GUF.ApplyPosition(entry, nil, session)
+                    self.dragStart = { cursorX, cursorY }
                     self.origin = { cfg.x, cfg.y }
                     self:SetScript("OnUpdate", function(control)
-                        if InCombatLockdown() then control:SetScript("OnUpdate", nil); return end
+                        if GUF.Restricted() or GUF.editing or not GUF.FramePositionDragIsCurrent(entry, session) then
+                            control:SetScript("OnUpdate", nil)
+                            GUF.EndFramePositionDrag(entry, session)
+                            control.positionSession = nil
+                            return
+                        end
                         local cx, cy = GetCursorPosition()
-                        cfg.x = control.origin[1] + (cx - control.dragStart[1]) / UIParent:GetEffectiveScale()
-                        cfg.y = control.origin[2] + (cy - control.dragStart[2]) / UIParent:GetEffectiveScale()
-                        GUF.ApplyPosition(entry)
+                        local screenScale = UIParent:GetEffectiveScale()
+                        if not number(cx) or not number(cy) or not number(screenScale) or screenScale <= 0 then return end
+                        cfg.x = control.origin[1] + (cx - control.dragStart[1]) / screenScale
+                        cfg.y = control.origin[2] + (cy - control.dragStart[2]) / screenScale
+                        GUF.ApplyPosition(entry, nil, session)
                     end)
                 end)
                 mover:SetScript("OnDragStop", function(self)
                     self:SetScript("OnUpdate", nil)
-                    local cfg = GUF.db.frames[unit].position
-                    cfg.x, cfg.y = math.floor(cfg.x + .5), math.floor(cfg.y + .5)
-                    GUF.RequestApply()
+                    local session = self.positionSession
+                    if GUF.FramePositionDragIsCurrent(entry, session) then
+                        local cfg = session.position
+                        cfg.x, cfg.y = math.floor(cfg.x + .5), math.floor(cfg.y + .5)
+                    end
+                    GUF.EndFramePositionDrag(entry, session)
+                    self.positionSession = nil
+                    GUF.RequestApply(nil, nil, "mover")
                     if GUF.options and GUF.options:IsShown() then GUF.BuildOptions(unit) end
                 end)
                 mover:SetScript("OnMouseUp", function(_, mouseButton)
-                    if mouseButton == "RightButton" then GUF.SetFrameMovers(false); GUF.SetMovers(false) end
+                    if mouseButton == "RightButton" then GUF.SetMovers(false) end
+                end)
+                mover:SetScript("OnHide", function(self)
+                    self:SetScript("OnUpdate", nil)
+                    GUF.EndFramePositionDrag(entry, self.positionSession)
+                    self.positionSession = nil
                 end)
             end
             if mover then
                 mover:SetScript("OnUpdate", nil)
+                GUF.EndFramePositionDrag(entry, mover.positionSession)
+                mover.positionSession = nil
                 mover:SetShown(enabled)
             end
         end

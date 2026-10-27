@@ -50,8 +50,7 @@ function UI.BuildManualPosition(builder, unit)
     host.moveFrames:SetEnabled(not GUF.Restricted() and not GUF.editing)
     host.moveFrames:SetText(GUF.frameMoversUnlocked and "Lock Frames" or "Unlock Frames")
     host.moveFrames:SetScript("OnClick", function()
-        if GUF.frameMoversUnlocked and GUF.configurationUnlocked then GUF.SetMovers(false)
-        else GUF.SetFrameMovers(not GUF.frameMoversUnlocked) end
+        GUF.SetMovers(not GUF.frameMoversUnlocked)
     end)
     host.moveFrames:Show()
     UI.Tooltip(host.moveFrames, "Unlock / Lock Frames", "Unlock the actual frames to drag them to new screen positions. Click again, right-click a mover or close this window to lock them. The options preview is controlled only by settings.")
@@ -101,8 +100,6 @@ function UI.BuildManualPosition(builder, unit)
             restore()
         end
         restore()
-        field:SetScript("OnEnterPressed", function(self) commit(self); self:ClearFocus() end)
-        field:SetScript("OnEditFocusLost", commit)
-        field:SetScript("OnEscapePressed", function(self) restore(); self:ClearFocus() end)
+        builder.BindEdit(field, commit, restore)
     end
 end

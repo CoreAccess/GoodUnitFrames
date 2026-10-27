@@ -1,5 +1,9 @@
 local _, GUF = ...
 
+local function leaseAlpha(region, value, relative)
+    return GUF.RegionAlpha(region, value, relative, "BlizzardFrames")
+end
+
 -- Shared by visibility handling and the options page.
 GUF.blizzardFrameOptions = {
     { key = "buffs", label = "Hide buff frames", frames = { "BuffFrame" },
@@ -40,6 +44,13 @@ local states, hooked, creationHooks = {}, {}, {}
 local endCapRegions, endCapHooks = {}, {}
 local hiddenParent
 
+function GUF.BindBlizzardEndCaps(request)
+    if not GUF.LayoutTransitions.IsCurrent(request) then return end
+    GUF.appliedEndCaps = { enabled = GUF.db.hideBlizzard.endCaps == true,
+        layout = GUF.db.general.frameStyle, revision = request.revision }
+    GUF.ApplyBlizzardEndCaps()
+end
+
 function GUF.ApplyBlizzardEndCaps()
     if not GUF.db then return end
     local desired = {}
@@ -57,14 +68,14 @@ function GUF.ApplyBlizzardEndCaps()
             include(cap.Selection)
         end
     end
-    if GUF.db.hideBlizzard.endCaps then
+    if GUF.appliedEndCaps and GUF.appliedEndCaps.enabled then
         local caps = MainActionBar and MainActionBar.EndCaps
         if caps then includeCap(caps.LeftEndCap); includeCap(caps.RightEndCap) end
         includeCap(MainMenuBarLeftEndCap)
         includeCap(MainMenuBarRightEndCap)
         if MainActionBar and type(MainActionBar.UpdateEndCaps) == "function" and not endCapHooks[MainActionBar] then
             endCapHooks[MainActionBar] = true
-            hooksecurefunc(MainActionBar, "UpdateEndCaps", GUF.ApplyBlizzardEndCaps)
+            GUF.NativeProperties.Hook("BlizzardFrames:1", MainActionBar, "UpdateEndCaps", GUF.ApplyBlizzardEndCaps)
         end
     end
     -- Override only cap artwork/selection alpha, never the secure bar or cap
@@ -72,12 +83,12 @@ function GUF.ApplyBlizzardEndCaps()
     -- RegionAlpha also remembers native alpha updates for restoration.
     for region in pairs(endCapRegions) do
         if not desired[region] and not (region.IsForbidden and region:IsForbidden()) then
-            GUF.RegionAlpha(region, nil)
+            leaseAlpha(region, nil)
             endCapRegions[region] = nil
         end
     end
     for region in pairs(desired) do
-        GUF.RegionAlpha(region, 0)
+        leaseAlpha(region, 0)
         endCapRegions[region] = true
     end
 end
@@ -94,14 +105,17 @@ local function suppress(frame, hide)
     local state = states[frame]
     if not hide then
         if state then
-            states[frame] = nil
             -- Only undo our own reparenting, preserving another addon's changes.
-            if frame:GetParent() == hiddenParent then frame:SetParent(state.parent) end
+            local parent = frame:GetParent()
+            if GUF.Secret(parent) then GUF.DeferRuntime("visibility-parent"); return end
+            state.releasing = true
+            if parent == hiddenParent then frame:SetParent(state.parent) end
+            state.releasing, states[frame] = nil, nil
         end
         return
     end
     if not hiddenParent then
-        hiddenParent = CreateFrame("Frame", nil, UIParent)
+        hiddenParent = GUF.Runtime.CreateFrame("Frame", nil, UIParent)
         hiddenParent.goodUnitFramesOwned = true
         hiddenParent:Hide()
     end
@@ -110,11 +124,12 @@ local function suppress(frame, hide)
         if GUF.Secret(parent) then GUF.QueueBlizzardFrameRefresh(); return end
         state = { parent = parent }
         states[frame] = state
+        GUF.NativeProperties.Track(frame, "visibilityParent", nil, state)
     end
     if not hooked[frame] then
-        hooksecurefunc(frame, "SetParent", function(self, parent)
+        GUF.NativeProperties.Hook("BlizzardFrames:2", frame, "SetParent", function(self, parent)
             local current = states[self]
-            if not current or GUF.Secret(parent) or parent == hiddenParent then return end
+            if not current or current.releasing or GUF.Secret(parent) or parent == hiddenParent then return end
             current.parent = parent
             if current.reparenting then return end
             if GUF.Restricted() or GUF.editing then GUF.QueueBlizzardFrameRefresh(); return end
@@ -140,7 +155,7 @@ function GUF.ApplyBlizzardFrames()
     -- Some opponent/raid frames are created or replaced after login.
     for _, name in ipairs({ "CompactArenaFrame_Generate", "CompactRaidFrameManager_UpdateShown" }) do
         if type(_G[name]) == "function" and not creationHooks[name] then
-            hooksecurefunc(name, GUF.QueueBlizzardFrameRefresh)
+            GUF.NativeProperties.Hook("BlizzardFrames:3", name, GUF.QueueBlizzardFrameRefresh)
             creationHooks[name] = true
         end
     end
@@ -149,7 +164,7 @@ function GUF.ApplyBlizzardFrames()
         if frame then desired[frame] = desired[frame] or hide end
     end
     for _, option in ipairs(GUF.blizzardFrameOptions) do
-        local hide = GUF.db.hideBlizzard[option.key]
+        local hide = GUF.Runtime.Settings("visibility").hideBlizzard[option.key]
         for _, name in ipairs(option.frames) do
             include(_G[name], hide)
         end

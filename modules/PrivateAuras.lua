@@ -1,32 +1,38 @@
 local _, GUF = ...
+local Client = GUF.Client
 
 local function clear(host)
     if not host then return end
-    if C_UnitAuras and C_UnitAuras.RemovePrivateAuraAnchor then
-        for _, id in pairs(host.anchors) do C_UnitAuras.RemovePrivateAuraAnchor(id) end
-    end
-    host.anchors, host.signature = {}, nil
     host.container:Hide()
+    host.signature = nil
+    local api = host.privateAuraAPI
+    if api then
+        for key, id in pairs(host.anchors) do api.removeAnchor(id); host.anchors[key] = nil end
+    end
+    host.anchors, host.signature, host.privateAuraAPI = {}, nil, nil
 end
 
 function GUF.ApplyPrivateAuras()
-    local entry, cfg = GUF.frames.player, GUF.db.frames.player
+    local entry, cfg = GUF.frames.player, GUF.Runtime.Settings("auras", "player").frames.player
     local settings, host = cfg.auras.bossDebuffs, GUF.privateAuraHost
     if not entry or not settings.enabled then clear(host); return end
-    if not C_UnitAuras or not C_UnitAuras.AddPrivateAuraAnchor then
+    local api = Client.GetPrivateAuraAPI()
+    if not api then
         clear(host)
         if not GUF.privateAuraUnavailable then
             GUF.Print("Boss debuffs require Blizzard's private-aura API, which is unavailable on this client.")
             GUF.privateAuraUnavailable = true
         end
-        return
+        return "unavailable", "private-aura-api"
     end
     local signature = table.concat({ settings.size, settings.perRow, settings.maxRows, settings.anchorPoint,
         settings.x, settings.y, tostring(settings.showCooldown), tostring(settings.showCooldownNumbers) }, ":")
-    if host and host.signature == signature then return end
+    if host and host.signature == signature and host.privateAuraAPI
+        and host.privateAuraAPI.addAnchor == api.addAnchor
+        and host.privateAuraAPI.removeAnchor == api.removeAnchor then return end
     clear(host)
     if not host then
-        host = { anchors = {}, container = CreateFrame("Frame", nil, entry.frame) }
+        host = { anchors = {}, container = GUF.Runtime.CreateFrame("Frame", nil, entry.frame) }
         GUF.privateAuraHost = host
         host.container.goodUnitFramesOwned = true
         host.container:SetFrameStrata("MEDIUM")
@@ -40,9 +46,10 @@ function GUF.ApplyPrivateAuras()
     container:SetPoint("CENTER", settings.anchorPoint == "FREE" and UIParent or entry.frame,
         settings.anchorPoint == "FREE" and "CENTER" or settings.anchorPoint, settings.x / scale, settings.y / scale)
     container:SetFrameLevel(entry.frame:GetFrameLevel() + 7)
+    host.privateAuraAPI = api
     local ok, err = pcall(function()
         for i = 1, settings.perRow * settings.maxRows do
-            local id = C_UnitAuras.AddPrivateAuraAnchor({
+            local id = api.addAnchor({
                 unitToken = "player", auraIndex = i, parent = container, isContainer = false,
                 showCountdownFrame = settings.showCooldown, showCountdownNumbers = settings.showCooldownNumbers,
                 iconInfo = { iconWidth = baseSize, iconHeight = baseSize, borderScale = baseSize / 18,
@@ -59,7 +66,7 @@ function GUF.ApplyPrivateAuras()
             GUF.Print("Boss debuffs could not start. " .. tostring(err))
             GUF.privateAuraErrorReported = true
         end
-        return
+        return "failed", "private-aura-registration"
     end
     host.signature = signature
     container:Show()

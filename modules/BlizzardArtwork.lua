@@ -136,7 +136,7 @@ local function artwork(unit)
     local player = GUF.frames.player
     if player then GUF.CaptureBlizzardArtwork(player) end
     if player and player.blizzardArtwork then return player.blizzardArtwork end
-    GUF.pending = true
+    GUF.QueueRecovery("artwork-not-ready", player)
 end
 
 local rings = {}
@@ -193,7 +193,7 @@ function GUF.PlaceBlizzardRing(target, source, parent, diameter)
     local mask = target.goodUnitFramesBlizzardMask
     if not mask then
         if not parent.configurationPreview and (GUF.Restricted() or GUF.editing) then
-            GUF.pending = true; target:Hide(); return
+            GUF.QueueRecovery("artwork-mask-restricted"); target:Hide(); return
         end
         mask = target:GetParent():CreateMaskTexture(nil, "ARTWORK")
         mask.goodUnitFramesOwned = true

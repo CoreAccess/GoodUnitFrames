@@ -20,46 +20,6 @@ local function call(fn, ...)
     return pcall(fn, ...)
 end
 
-local lifecycleHooks = {}
-function GUF.WatchRetailResourceLifecycle()
-    if not GUF.isRetail then return end
-    local anchorUpdate = "PlayerFrame_UpdatePlayerNameTextAnchor"
-    if not lifecycleHooks[anchorUpdate] and type(_G[anchorUpdate]) == "function" then
-        lifecycleHooks[anchorUpdate] = true
-        hooksecurefunc(anchorUpdate, function()
-            local entry = GUF.frames and GUF.frames.player
-            if GUF.db and GUF.db.general.frameStyle == "artistic" and entry then
-                -- Every DH specialization can trigger this writer, including
-                -- Havoc/Vengeance transitions without a Devourer bar argument.
-                GUF.RestoreArtisticPlayerNameAnchor(entry)
-            end
-        end)
-    end
-    for _, name in ipairs({ "PlayerFrame_OnAlternatePowerBarEnabled", "PlayerFrame_OnAlternatePowerBarDisabled" }) do
-        if not lifecycleHooks[name] and type(_G[name]) == "function" then
-            lifecycleHooks[name] = true
-            hooksecurefunc(name, function(bar)
-                -- Alternate-power attach/detach rebuilds native Player artwork and
-                -- resets PlayerName AFTER specialization-event listeners may
-                -- have applied our layout. Reconcile once that rebuild ends.
-                local relevant = DemonHunterSoulFragmentsBar and bar == DemonHunterSoulFragmentsBar
-                if AlternatePowerBar and bar == AlternatePowerBar then
-                    local _, class = UnitClass("player")
-                    relevant = not GUF.Secret(class) and class == "PRIEST"
-                end
-                if not relevant then return end
-                local entry = GUF.frames and GUF.frames.player
-                if GUF.db and GUF.db.general.frameStyle == "artistic"
-                    and entry and entry.artisticLayout and entry.artisticLayout.active then
-                    -- Full resource reconciliation still defers; the separate
-                    -- name post-hook handles the DH-specific cosmetic repair.
-                    GUF.pending = true
-                end
-            end)
-        end
-    end
-end
-
 local function specialization(unit)
     local api = C_SpecializationInfo
     local ok, spec
@@ -148,21 +108,7 @@ function GUF.RetailResourceKind(unit)
     end
 end
 
-function GUF.RetailResourceNativeFrames(kind)
-    local frames = {}
-    local function add(frame)
-        if frame and frame.SetAlpha and frame.IsShown then frames[#frames + 1] = frame end
-    end
-    if kind == "holy" then add(PaladinPowerBarFrame)
-    elseif kind == "chi" then add(MonkHarmonyBarFrame)
-    elseif kind == "arcane" then add(MageArcaneChargesFrame)
-    elseif kind == "essence" then add(EssencePlayerFrame)
-    elseif kind == "fragments" then add(DemonHunterSoulFragmentsBar)
-    elseif kind == "stagger" then add(MonkStaggerBar)
-    elseif kind == "shadowmana" then add(AlternatePowerBar)
-    elseif kind == "ebon" then add(EvokerEbonMightBar) end
-    return frames
-end
+GUF.RetailResourceNativeFrames = GUF.Client.ResolveResourceFrames
 
 local function playerCache(unit, entry)
     if unit ~= "player" or entry.unit ~= "target" then return end
@@ -322,28 +268,6 @@ function GUF.ResourceRowColor(kind)
     local def = GUF.RetailResourceDefinition(kind)
     return def and def.color or kind == "runes" and GUF.powerColors.RUNES
         or kind == "shards" and GUF.powerColors.SOULSHARDS or GUF.powerColors.COMBOPOINTS
-end
-
--- Animation uses only cached public timing. Resource queries remain on existing
--- events/quarter-second state updates; hidden specimens never drive live state.
-function GUF.AnimateRetailResourceRow(entry, row)
-    if entry.configurationPreview or not row.displayed then return end
-    local now, progress = GetTime(), row.progress
-    if row.primaryShown and progress then
-        if progress.kind == "runes" then
-            for i, rune in ipairs(progress.runes) do
-                local value = rune.value
-                if rune.start then value = math.min(.999, math.max(0, (now - rune.start) / rune.duration)) end
-                row.slots[i].fill:SetValue(value)
-            end
-        elseif progress.kind == "essence" then
-            local value = progress.count + math.min(.999, progress.partial + math.max(0, now - progress.time) * progress.rate)
-            for i = 1, row.capacity do row.slots[i].fill:SetValue(value) end
-        end
-    end
-    if row.auxShown and row.ebonExpiration then
-        row.aux.fill:SetValue(math.max(0, row.ebonExpiration - now))
-    end
 end
 
 function GUF.ResetRetailResourceCaches()

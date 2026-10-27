@@ -35,105 +35,6 @@ function GUF.ValidateProfileName(name)
     return true
 end
 
-local function retireUnitSwitches(frames)
-    if type(frames) ~= "table" then return end
-    for _, settings in pairs(frames) do
-        if type(settings) == "table" then settings.enabled = nil end
-    end
-end
-
-local function normalizeNameDisplays(frames)
-    if type(frames) ~= "table" then return end
-    for _, unit in ipairs(GUF.order) do
-        local cfg = frames[unit]
-        if type(cfg) == "table" then
-            if unit == "pet" then cfg.nameDisplay = nil
-            elseif cfg.nameDisplay ~= "first" and cfg.nameDisplay ~= "last" and cfg.nameDisplay ~= "full" then cfg.nameDisplay = "full" end
-        end
-    end
-end
-
-local function retirePredictionSettings(frames)
-    if type(frames) ~= "table" then return end
-    for _, cfg in pairs(frames) do
-        local bars = type(cfg) == "table" and cfg.bars
-        if type(bars) == "table" then
-            bars.nativePredictions = nil
-            for _, key in ipairs({ "incHeal", "incAbsorb", "healAbsorb" }) do
-                if type(bars[key]) == "table" then bars[key].texture = nil end
-            end
-        end
-    end
-end
-
-local function normalizeCombatText(frames)
-    for _, cfg in pairs(type(frames) == "table" and frames or {}) do
-        if type(cfg) == "table" then
-            if type(cfg.combatText) == "table" then cfg.combatText.native = nil end
-            local feedback = type(cfg.indicators) == "table" and cfg.indicators.feedback
-            if type(feedback) == "table" then
-                local scale = feedback.scale
-                if type(scale) ~= "number" or scale ~= scale or scale == math.huge or scale == -math.huge then scale = 1 end
-                -- Retain the renderer multiplier; snap old choices to the
-                -- new control's half-unit steps without repeat conversion.
-                feedback.scale = math.max(.5, math.min(2, math.floor(scale * 4 + .5) / 4))
-            end
-        end
-    end
-end
-
-local castPoints = { TOPLEFT = true, TOP = true, TOPRIGHT = true, LEFT = true, CENTER = true,
-    RIGHT = true, BOTTOMLEFT = true, BOTTOM = true, BOTTOMRIGHT = true }
-local castOutlines = { [""] = true, OUTLINE = true, THICKOUTLINE = true, ["MONOCHROME,OUTLINE"] = true }
-
-function GUF.NormalizeCastSettings(frames, style)
-    local defaults = GUF.defaults.frames.player.bars.cast
-    for _, cfg in pairs(type(frames) == "table" and frames or {}) do
-        local cast = type(cfg) == "table" and cfg.bars and cfg.bars.cast
-        if type(cast) == "table" then
-            cast.native = nil
-            cast.autoHide = nil -- Empty cast bars always hide; retire the old preference.
-            for _, kind in ipairs({ "name", "time" }) do
-                local label = cast[kind]
-                if type(label) == "table" and (type(label.outline) ~= "string" or not castOutlines[label.outline]) then
-                    -- Retire the old inherited choice in every profile/layout.
-                    label.outline = style == "blizzard" and "" or (castOutlines[cfg.outline or ""] and cfg.outline or "OUTLINE")
-                end
-            end
-            cast.avoidAuras = nil -- Cast/aura avoidance is always active.
-            if cast.icon == "BLIZZARD" then cast.icon = "LEFT" end
-            if type(cast.position) ~= "table" then cast.position = {} end
-            local position = cast.position
-            local legacyDefault = position.point == "DEFAULT"
-            if type(position.point) ~= "string" or not castPoints[position.point] then
-                position.point = legacyDefault and "TOPLEFT" or defaults.position.point
-            end
-            if type(position.relativePoint) ~= "string" or not castPoints[position.relativePoint] then
-                position.relativePoint = legacyDefault and "BOTTOMLEFT" or defaults.position.relativePoint
-            end
-            for _, key in ipairs({ "x", "y" }) do
-                local value = position[key]
-                if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
-                    value = legacyDefault and 0 or defaults.position[key]
-                end
-                if legacyDefault and key == "y" then value = value - 6 end
-                position[key] = math.max(-150, math.min(150, value))
-            end
-            if cast.font == "Blizzard" then cast.font = "Default" end
-            if type(cast.font) ~= "string" or cast.font == "" then
-                cast.font = style == "blizzard" and "Default" or cfg.font or "Default"
-            end
-            for _, key in ipairs({ "width", "height" }) do
-                local value = cast[key]
-                if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge or value <= 0 then
-                    value = defaults[key]
-                end
-                cast[key] = math.max(key == "width" and 100 or 10, math.min(key == "width" and 250 or 30, value))
-            end
-        end
-    end
-end
-
 function GUF.AttachProfile()
     migrateAddonName()
     if type(GoodUnitFramesProfiles) ~= "table" or GoodUnitFramesProfiles.resetGeneration ~= resetGeneration then
@@ -144,44 +45,8 @@ function GUF.AttachProfile()
     if type(storage.profiles) ~= "table" then storage.profiles = {} end
     storage.profileKeys = nil
     if type(storage.profiles.Default) ~= "table" then storage.profiles.Default = GUF.Copy(GUF.factoryDefaults) end
-    -- Layout selection now owns every supported unit. Remove old opt-outs from
-    -- inactive profiles and style snapshots too, without resetting preferences.
     for _, profile in pairs(storage.profiles) do
-        if type(profile) == "table" then
-            GUF.NormalizeLayouts(profile)
-            retireUnitSwitches(profile.frames)
-            normalizeNameDisplays(profile.frames)
-            GUF.NormalizeResourceIndicators(profile.frames)
-            GUF.NormalizeNameText(profile.frames)
-            GUF.NormalizeThreatText(profile.frames, profile.threat, profile.general and profile.general.frameStyle)
-            GUF.NormalizeRankText(profile.frames)
-            GUF.NormalizeDesignSettings(profile.frames)
-            GUF.NormalizeFrameScales(profile.frames, profile.general and profile.general.frameStyle or "blizzard")
-            GUF.NormalizeTextEditors(profile.frames)
-            GUF.NormalizeAuraOptions(profile.frames)
-            retirePredictionSettings(profile.frames)
-            normalizeCombatText(profile.frames)
-            GUF.NormalizeCastSettings(profile.frames, profile.general and profile.general.frameStyle or "blizzard")
-            if type(profile.layouts) == "table" then
-                for style, layout in pairs(profile.layouts) do
-                    if type(layout) == "table" then
-                        retireUnitSwitches(layout.frames)
-                        normalizeNameDisplays(layout.frames)
-                        GUF.NormalizeResourceIndicators(layout.frames)
-                        GUF.NormalizeNameText(layout.frames)
-                        GUF.NormalizeThreatText(layout.frames, layout.threat, style)
-                        GUF.NormalizeRankText(layout.frames)
-                        GUF.NormalizeDesignSettings(layout.frames)
-                        GUF.NormalizeFrameScales(layout.frames, style)
-                        GUF.NormalizeTextEditors(layout.frames)
-                        GUF.NormalizeAuraOptions(layout.frames)
-                        retirePredictionSettings(layout.frames)
-                        normalizeCombatText(layout.frames)
-                        GUF.NormalizeCastSettings(layout.frames, style)
-                    end
-                end
-            end
-        end
+        if type(profile) == "table" then GUF.Settings.PrepareProfile(profile) end
     end
     local name = storage.selectedProfile
     if type(name) ~= "string" or type(storage.profiles[name]) ~= "table" then
@@ -210,7 +75,7 @@ end
 
 local function applyProfile()
     GUF.InitializeDB()
-    GUF.RequestApply()
+    GUF.RequestApply(nil, nil, "profile")
     GUF.ApplyPanelScale(true)
     if GUF.options then GUF.BuildOptions() end
 end

@@ -48,7 +48,7 @@ UI.RegisterPage("hideBlizzard", "Hide Blizzard", function(builder)
     host.restore:SetEnabled(not GUF.Restricted() and not GUF.editing)
     host.restore:SetScript("OnClick", function()
         for key in pairs(GUF.db.hideBlizzard) do GUF.db.hideBlizzard[key] = false end
-        GUF.RequestApply(); GUF.BuildOptions()
+        GUF.RequestApply(nil, nil, "visibility-restore"); GUF.BuildOptions()
     end)
     host.restore:Show()
 end)

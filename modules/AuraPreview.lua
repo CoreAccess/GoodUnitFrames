@@ -21,7 +21,7 @@ local samples = {
 }
 local borderColors = { { .2, .6, 1 }, { .6, 0, 1 }, { 0, .6, 0 }, { .6, .4, 0 }, { .8, 0, 0 } }
 local hosts = {}
-local driver = CreateFrame("Frame", nil, UIParent)
+local driver = GUF.Runtime.CreateFrame("Frame", nil, UIParent)
 driver:Hide()
 
 function GUF.SyncAuraPreviewVisibility()
@@ -39,10 +39,10 @@ local function getHost(key, entry)
     local pool = entry and entry.optionsPreview and entry.auraSamples or hosts
     local host = pool[key]
     if not host then
-        host = { buttons = {}, count = 0, frame = CreateFrame("Frame", nil, entry and entry.optionsPreview and entry.frame or UIParent) }
+        host = { buttons = {}, count = 0, frame = GUF.Runtime.CreateFrame("Frame", nil, entry and entry.optionsPreview and entry.frame or UIParent) }
         pool[key] = host
         host.frame.goodUnitFramesOwned = true
-        host.anchor = CreateFrame("Frame", nil, host.frame)
+        host.anchor = GUF.Runtime.CreateFrame("Frame", nil, host.frame)
         host.anchor.goodUnitFramesOwned = true
         host.anchor:EnableMouse(false)
         host.frame:SetFrameStrata(entry and entry.optionsPreview and entry.frame:GetFrameStrata() or "MEDIUM")
@@ -55,16 +55,16 @@ end
 local function getButton(host, index)
     local record = host.buttons[index]
     if record then return record end
-    local button = CreateFrame("Button", nil, host.frame)
+    local button = GUF.Runtime.CreateFrame("Button", nil, host.frame)
     button.goodUnitFramesOwned = true
     button.icon = button:CreateTexture(nil, "BACKGROUND")
     button.icon:SetAllPoints()
     button.icon:SetTexCoord(.07, .93, .07, .93)
-    local cooldown = CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
+    local cooldown = GUF.Runtime.CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
     cooldown:SetAllPoints()
     cooldown:SetReverse(true)
     cooldown:SetDrawEdge(false)
-    local overlay = CreateFrame("Frame", nil, button)
+    local overlay = GUF.Runtime.CreateFrame("Frame", nil, button)
     overlay:SetAllPoints()
     overlay:SetFrameLevel(button:GetFrameLevel() + 3)
     record = { button = button, icon = button.icon, cooldown = cooldown,
@@ -86,7 +86,13 @@ local function getButton(host, index)
         if GameTooltip:IsOwned(self) then GameTooltip:Hide() end
     end
     button:SetScript("OnLeave", hideTooltip)
-    button:SetScript("OnHide", hideTooltip)
+    button:SetScript("OnHide", function(self)
+        hideTooltip(self)
+        record.fakeStart, record.previewStarted = nil, nil
+        record.timer:SetText(""); record.duration:SetText(""); record.stack:SetText("")
+        record.cooldown:Hide()
+        self:ClearAllPoints()
+    end)
     host.buttons[index] = record
     return record
 end
@@ -106,6 +112,7 @@ local function updateTimer(record, now)
 end
 
 function GUF.TickSpecimenAuras(entry)
+    if not entry.frame:IsVisible() then return end
     for _, host in pairs(entry.auraSamples or {}) do
         if host.frame:IsShown() then
             for i = 1, host.count do updateTimer(host.buttons[i], GetTime()) end
@@ -119,6 +126,7 @@ local function styleSample(record, section, frameCfg, seed, sample)
     record.name, record.kind, record.seed = sample[1], section.kind == "buffs" and "buff" or "debuff", seed
     record.fakeDuration = 45 + (seed % 8) * 30
     record.button.icon:SetTexture("Interface\\Icons\\" .. sample[2])
+    record.cooldown:Show()
     GUF.StyleAuraButton(record, section, frameCfg)
     local text = section.cfg
     -- The owned font strings above provide predictable sample timers, with the same styling as live text.
@@ -167,7 +175,7 @@ local function renderFlow(key, entry, cfg, items)
         if x > 0 and x + size > widthLimit then x, y, rowHeight = 0, y + rowHeight + cfg.spacing, 0 end
         local record = getButton(host, i)
         record.previewStarted = entry.previewStarted
-        styleSample(record, item.section, GUF.db.frames[entry.unit], item.seed, item.sample)
+        styleSample(record, item.section, GUF.Runtime.Settings("auras", entry).frames[entry.unit], item.seed, item.sample)
         record.button:ClearAllPoints()
         record.button:SetPoint(corner, host.frame, corner, cfg.growH == "LEFT" and -x or x, cfg.growV == "TOP" and y or -y)
         rowHeight, width = math.max(rowHeight, size), math.max(width, x + size)
@@ -184,22 +192,6 @@ local function renderFlow(key, entry, cfg, items)
     -- not the far edge of the complete multi-row capacity/sample rectangle.
     host.anchor:ClearAllPoints(); host.anchor:SetPoint(point, host.frame, point, 0, 0)
     host.anchor:SetSize(cfg.size, cfg.size)
-    local kind, index = key:match("^(%a+)(%d+)$")
-    if kind and not entry.optionsPreview and GUF.BindConfigurationDrag then
-        index = tonumber(index)
-        host.grip = host.grip or CreateFrame("Frame", nil, host.frame)
-        host.grip.goodUnitFramesOwned = true
-        host.grip:SetAllPoints(host.frame)
-        host.grip:SetFrameLevel(host.frame:GetFrameLevel() + 8)
-        GUF.BindConfigurationDrag(host.grip, entry.unit, function()
-            local saved = GUF.db.frames[entry.unit].auras[kind][index]
-            if not saved.enabled and GUF.configurationShowAll then
-                saved.enabled, saved.anchorPoint, saved.growV = true, cfg.anchorPoint, cfg.growV
-                saved.x, saved.y, saved.legacyPoint = cfg.x, cfg.y, nil
-            end
-            return saved
-        end, "auras", { kind = kind, index = index })
-    end
     host.frame:Show()
     return host
 end
@@ -224,7 +216,7 @@ local function renderBoss(entry, cfg)
     for i = 1, host.count do
         local record = getButton(host, i)
         record.previewStarted = entry.previewStarted
-        styleSample(record, { kind = "debuffs", cfg = style, size = 32 }, GUF.db.frames.player, i, samples.debuffs[(i - 1) % #samples.debuffs + 1])
+        styleSample(record, { kind = "debuffs", cfg = style, size = 32 }, GUF.Runtime.Settings("auras", "player").frames.player, i, samples.debuffs[(i - 1) % #samples.debuffs + 1])
         record.button:ClearAllPoints()
         record.button:SetPoint("TOPLEFT", host.frame, "TOPLEFT", ((i - 1) % cfg.perRow) * 34, -math.floor((i - 1) / cfg.perRow) * 34)
     end
@@ -234,12 +226,12 @@ end
 
 function GUF.RefreshAuraPreview(specimen)
     if not specimen and not GUF.auraPreviewUnit then return end
-    local entry = specimen or GUF.configurationPreviewEntry or GUF.frames[GUF.auraPreviewUnit]
+    local entry = specimen or GUF.frames[GUF.auraPreviewUnit]
     if not entry then return end
     entry.auraSamples = entry.auraSamples or {}
     local pool = entry.optionsPreview and entry.auraSamples or hosts
     for _, host in pairs(pool) do host.previewUsed = false end
-    local auras = GUF.Copy(GUF.db.frames[entry.unit].auras)
+    local auras = GUF.Copy(GUF.Runtime.Settings("auras", entry).frames[entry.unit].auras)
     -- Options specimens mirror saved enablement across every editor tab. Only
     -- the separate legacy mover diagnostic may force disabled aura groups on.
     if not entry.optionsPreview and GUF.configurationShowAll then
@@ -302,7 +294,6 @@ function GUF.SetConfigurationAuraPreview(enabled, unit)
         driver:Hide()
         for _, host in pairs(hosts) do
             host.frame:Hide()
-            if host.grip then host.grip:SetScript("OnUpdate", nil); host.grip.drag = nil end
         end
         GUF.SyncAuraPreviewVisibility()
     end

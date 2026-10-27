@@ -16,27 +16,72 @@ local function nativeSetting(entry)
 end
 
 function GUF.NormalizeFrameScales(frames, style)
-    local minimum = style == "artistic" and .75 or 1
+    local policy = GUF.Layouts.ScalePolicy(style)
     for _, cfg in pairs(type(frames) == "table" and frames or {}) do
         if type(cfg) == "table" then
-            cfg.scale = number(cfg.scale) and math.max(minimum, math.min(1.5, cfg.scale)) or 1
+            cfg.scale = number(cfg.scale) and math.max(policy.minimum, math.min(policy.maximum, cfg.scale)) or 1
         end
     end
 end
 
-function GUF.FrameScaleLimits(unit)
-    if GUF.db.general.frameStyle == "artistic" then return .75, 1.5, .01 end
-    local entry = GUF.frames[unit]
+local function limits(entry, policy)
+    if not policy.nativeSetting then return policy.minimum, policy.maximum, policy.step end
     local setting = nativeSetting(entry)
     local info = setting and entry.frame.settingDisplayInfoMap and entry.frame.settingDisplayInfoMap[setting]
     if info and number(info.minValue) and number(info.maxValue) and info.minValue > 0 and info.maxValue >= info.minValue then
-        local minimum, maximum = math.max(1, info.minValue / 100), math.min(1.5, info.maxValue / 100)
+        local minimum, maximum = math.max(policy.minimum, info.minValue / 100), math.min(policy.maximum, info.maxValue / 100)
         if maximum >= minimum then
             return minimum, maximum,
-                number(info.stepSize) and info.stepSize > 0 and info.stepSize / 100 or .01
+                number(info.stepSize) and info.stepSize > 0 and info.stepSize / 100 or policy.step
         end
     end
-    return 1, 1.5, .01
+    return policy.minimum, policy.maximum, policy.step
+end
+
+function GUF.FrameScaleLimits(unit)
+    return limits(GUF.frames[unit], GUF.Layouts.ScalePolicy(GUF.db.general.frameStyle))
+end
+
+-- Capture only public scale inputs, once after layout commit and before either
+-- unit is written. Never mutate these records or use profile tables as inputs
+-- to a native repair hook after a newer request has been deferred.
+function GUF.CaptureFrameScaleRequest(request)
+    if not GUF.LayoutTransitions.IsCurrent(request, request.layout) then return false end
+    if request.frameScales then return true end
+    local inputs = {}
+    local policy = GUF.Copy(GUF.Layouts.ScalePolicy(request.layout))
+    for _, unit in ipairs(GUF.order) do
+        local cfg = request.profile.frames[unit]
+        inputs[unit] = { source = cfg, value = cfg.scale, layout = request.layout,
+            revision = request.revision, scope = "request", policy = policy }
+    end
+    request.frameScales = inputs
+    return true
+end
+
+local function editSession()
+    local session = GUF.editModeScaleSession
+    if GUF.editing and GUF.db and session and session.profile == GUF.db and session.frames == GUF.db.frames then return session end
+end
+
+local function scaleInput(entry, editModeSizeChange, request)
+    if request then
+        if not GUF.LayoutTransitions.IsCurrent(request, request.layout) then return end
+        return request.frameScales and request.frameScales[entry.unit]
+    end
+    local session = editModeSizeChange and editSession()
+    if session then
+        local cfg = session.frames[entry.unit]
+        return { source = cfg, value = cfg.scale, layout = GUF.db.general.frameStyle,
+            scope = "edit-mode", policy = GUF.Copy(GUF.Layouts.ScalePolicy(GUF.db.general.frameStyle)) }, session
+    end
+    return entry.appliedFrameScale
+end
+
+local function inputCurrent(entry, input, request, session)
+    if request then return GUF.LayoutTransitions.IsCurrent(request, input.layout) end
+    if session then return editSession() == session end
+    return entry.appliedFrameScale == input
 end
 
 local function refresh(unit)
@@ -45,13 +90,13 @@ local function refresh(unit)
 end
 
 local function receive(entry)
-    if entry.scaleWriting or not GUF.db or not GUF.editing then return end
+    if entry.scaleWriting or not GUF.db or not editSession() then return end
     local _, value = nativeSetting(entry)
     if not value or (entry.nativeScaleValue and math.abs(value - entry.nativeScaleValue) < .000001) then return end
     entry.nativeScaleValue = value
     local cfg = GUF.db.frames[entry.unit]
     cfg.scale = value
-    GUF.pending = true
+    GUF.QueueRecovery("native-scale-import", entry)
     -- This is the user's native size change, not a general layout apply.
     -- Normalize parents without reapplying artwork/anchors inside Edit Mode.
     if not GUF.Restricted() then
@@ -66,9 +111,10 @@ end
 
 local function hook(entry)
     if entry.scaleHooked then return end
-    hooksecurefunc(entry.frame, "SetScale", function()
+    GUF.NativeProperties.Hook("FrameScale:1", entry.frame, "SetScale", function()
         if entry.scaleWriting then return end
-        if GUF.db and GUF.db.general.frameStyle == "artistic" then
+        local applied = entry.appliedFrameScale
+        if applied and not applied.policy.nativeSetting then
             -- Native layout initialization still uses its own percentage.
             -- Reassert the independently configured Artistic scale only.
             -- Import a genuine native Edit Mode edit before reasserting scale;
@@ -78,53 +124,73 @@ local function hook(entry)
         end
         -- The native setting update has not finished yet. Its posthook imports
         -- the new percentage; reapplying here would overwrite the user's edit.
-        GUF.pending = true
+        GUF.QueueRecovery("native-scale", entry)
     end)
     for _, method in ipairs({ "UpdateSystem", "UpdateSystemSettingValue" }) do
         if type(entry.frame[method]) == "function" then
-            hooksecurefunc(entry.frame, method, function() receive(entry) end)
+            GUF.NativeProperties.Hook("FrameScale:2", entry.frame, method, function() receive(entry) end)
         end
     end
     entry.scaleHooked = true
 end
 
-function GUF.ApplyFrameScale(entry, editModeSizeChange)
-    if GUF.Restricted() or (GUF.editing and not editModeSizeChange) then GUF.pending = true; return end
+function GUF.ApplyFrameScale(entry, editModeSizeChange, request)
+    if GUF.Restricted() or (GUF.editing and not editModeSizeChange) then
+        GUF.QueueRecovery("scale-restricted", entry); return "deferred", "restricted"
+    end
+    if entry.scaleWriting then GUF.QueueRecovery("scale-writing", entry); return "deferred", "writing" end
+    local input, session = scaleInput(entry, editModeSizeChange, request)
+    if not input then GUF.QueueRecovery("scale-input", entry); return "deferred", "settings" end
     hook(entry)
-    local cfg = GUF.db.frames[entry.unit]
-    local artistic = GUF.db.general.frameStyle == "artistic"
+    local independent = not input.policy.nativeSetting
     local setting, nativeValue = nativeSetting(entry)
-    if not number(cfg.scale) or cfg.scale <= 0 then cfg.scale = 1 end
-    local minimum, maximum = GUF.FrameScaleLimits(entry.unit)
-    local value = math.max(minimum, math.min(maximum, cfg.scale))
+    local desired = number(input.value) and input.value > 0 and input.value or 1
+    local minimum, maximum = limits(entry, input.policy)
+    local value = math.max(minimum, math.min(maximum, desired))
     local parent = entry.frame:GetParent()
     local parentScale, screenScale = parent and parent:GetEffectiveScale(), UIParent:GetEffectiveScale()
     if not number(parentScale) or not number(screenScale) or parentScale <= 0 or screenScale <= 0 then
-        GUF.pending = true
-        return
+        GUF.QueueRecovery("scale-parent", entry)
+        return "deferred", "parent-scale"
     end
+    if not inputCurrent(entry, input, request, session) then GUF.QueueRecovery("scale-superseded", entry); return "deferred", "superseded" end
     entry.scaleWriting = true
+    GUF.NativeProperties.Track(entry.frame, "rootScale", entry, entry)
     -- Artistic can be smaller than Blizzard's native size control permits.
     -- Keep its absolute scale independent of the saved native setting.
-    if not artistic and setting and math.abs(value - nativeValue) > .000001 then
+    if not independent and setting and math.abs(value - nativeValue) > .000001 then
         entry.frame:UpdateSystemSettingValue(setting, value * 100)
         local _, applied = nativeSetting(entry)
         if applied then value = applied end
     end
-    -- Compare later native Edit Mode edits with the actual native value, not
-    -- the independent Artistic percentage, so opening it preserves 75%.
-    entry.nativeScaleValue = setting and (artistic and nativeValue or value) or nil
-    local changed = math.abs(cfg.scale - value) > .000001
-    cfg.scale = value
+    if not inputCurrent(entry, input, request, session) then
+        entry.scaleWriting = nil; GUF.QueueRecovery("scale-superseded", entry); return "deferred", "superseded"
+    end
     -- Every unit uses an absolute UIParent scale, regardless of its native
     -- parent or selected layout. This also isolates Pet/ToT from parent scale.
     parent = entry.frame:GetParent()
     parentScale = parent and parent:GetEffectiveScale()
     if number(parentScale) and parentScale > 0 then
         entry.frame:SetScale(value * screenScale / parentScale)
-    else GUF.pending = true end
+    else
+        entry.scaleWriting = nil; GUF.QueueRecovery("scale-parent", entry); return "deferred", "parent-scale"
+    end
     entry.scaleWriting = nil
+    if not inputCurrent(entry, input, request, session) then GUF.QueueRecovery("scale-superseded", entry); return "deferred", "superseded" end
+    -- Compare later native Edit Mode edits with the actual native value, not
+    -- the independent Artistic percentage, so opening it preserves 75%.
+    entry.nativeScaleValue = setting and (independent and nativeValue or value) or nil
+    if input ~= entry.appliedFrameScale or value ~= input.value then
+        entry.appliedFrameScale = { value = value, layout = input.layout, revision = input.revision,
+            scope = input.scope, policy = input.policy }
+    end
+    -- Only explicit apply/editor work may normalize its original desired value.
+    -- Repair hooks never write settings or import a newer profile's scale.
+    local source = input.source
+    local changed = source and source.scale == input.value and (not number(input.value) or math.abs(input.value - value) > .000001)
+    if source and source.scale == input.value then source.scale = value end
     if changed then refresh(entry.unit) end
+    return "applied"
 end
 
 function GUF.SetFrameScale(unit, value)

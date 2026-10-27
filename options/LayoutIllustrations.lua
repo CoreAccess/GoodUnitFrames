@@ -81,7 +81,7 @@ local function targetGeometry(native, cached)
     if native.unit ~= "target" or GUF.db.general.frameStyle ~= "blizzard"
         or GUF.editing or GUF.Restricted() or native.sizeOwned or native.sizeWriting
         or native.layoutWriting or native.barStyleWriting or GUF.geometryWriting
-        or (native.artisticLayout and native.artisticLayout.active) then return cached end
+        or (GUF.Layouts.NativeOriginal(native) or {}).active then return cached end
     local observer = native.blizzardPreviewGeometry
     if not observer then
         observer = { regions = {} }
@@ -295,13 +295,12 @@ function UI.BlizzardLayoutIllustration(parent, illustration, unit, specimen)
         illustration.textLayer = textLayer
         for _, item in ipairs(native.sizeRegions or {}) do illustration.geometry[item.region] = item end
         illustration.owners[native.frame] = frame
-        local state = native.artisticLayout
         local function geometry(source)
-            local saved = state and state.regions[source]
+            local saved = GUF.Layouts.NativeOriginal(native, source)
             return illustration.settledGeometry[source] or illustration.geometry[source] or saved and saved.geometry
         end
         local function originalParent(source)
-            local saved = state and state.regions[source]
+            local saved = GUF.Layouts.NativeOriginal(native, source)
             return saved and saved.parent or source:GetParent()
         end
         local owner, position
@@ -340,9 +339,8 @@ function UI.BlizzardLayoutIllustration(parent, illustration, unit, specimen)
             -- Artistic temporarily replaces native masks with rectangular
             -- artwork. Stock copies need the captured native mask media as
             -- well as its captured geometry, never that active replacement.
-            local layout = native.artisticLayout
-            local overridden = layout and (layout.active or layout.restorePending and layout.restorePending[source])
-            local mask = overridden and layout.masks and layout.masks[source]
+            local original = GUF.Layouts.NativeOriginal(native, source)
+            local mask = original and original.mask
             return GUF.CopyBlizzardTexture(source, target, saved or mask, fullBar)
         end
         local function art(source, layer)
@@ -690,7 +688,7 @@ local function stockIndicators(presentation, entry, options)
         loot = grouped or enabledIndicators, role = grouped or enabledIndicators, raid = grouped }
     for _, kind in ipairs({ "combat", "resting", "pvpBackground", "pvp", "leader", "loot", "role", "raid" }) do
         local key = kind == "pvpBackground" and "pvp" or kind
-        local badge = entry.artisticLayout.badges[key]
+        local badge = GUF.Presentation.Role(entry, "indicator:" .. key)
         if badge then badge:Hide() end
         local record = presentation.indicators and presentation.indicators[kind]
         if record then
@@ -776,7 +774,7 @@ local function stockStatus(presentation, entry, options)
     -- rim. Stock ready checks overlay the real portrait without hiding it;
     -- Dead/Ghost/Offline belong in Health text, not a generated portrait badge.
     for _, kind in ipairs({ "status", "resurrect" }) do
-        local badge = entry.artisticLayout.badges[kind]
+        local badge = GUF.Presentation.Role(entry, "indicator:" .. kind)
         if badge then badge:Hide() end
     end
     if not presentation.portrait then return end
@@ -819,21 +817,17 @@ local function stockStatus(presentation, entry, options)
     presentation.portrait:Show()
 end
 
--- Correct only the stock specimen's presentation after the shared public state
--- renderer has produced its sample values. Never touch a native unit frame.
+-- Blizzard owns its specimen construction and presentation. Shared sample data
+-- is public; native sources supply cosmetic metadata, never live amounts.
 function UI.RenderBlizzardSpecimen(entry, options)
     local native = GUF.frames[entry.unit]
     if not native then return end
     local presentation = UI.BlizzardLayoutIllustration(entry.frame:GetParent(), entry.blizzardPresentation, entry.unit, entry)
     if not presentation then return end
     entry.blizzardPresentation = presentation
-    local state, cfg, data = entry.artisticLayout, GUF.PresentationFrameSettings(entry), entry.previewData
-    if entry.nativeArt then entry.nativeArt:Hide() end
-    state.rim:Hide(); state.viewport:Hide(); state.portraitFallback:Hide()
-    state.housing:Hide(); state.nameStrip:Hide(); state.headerDivider:Hide(); state.divider:Hide()
-    if state.badges.level then state.badges.level:Hide() end
-    -- Reapply captured anchors on reused copies; the common state renderer must
-    -- not leave its custom portrait/bar coordinates on the stock illustration.
+    local state, cfg, data = entry.specimenState, GUF.PresentationFrameSettings(entry), entry.previewData
+    state.nameArea = presentation.nameArea
+    -- Restore the stock copies' baseline anchors before applying saved offsets.
     for copy, source in pairs(presentation.positions) do presentation.position(source, copy) end
     stockTarget(presentation, native, entry, options)
     state.width, state.height = entry.frame:GetSize()
@@ -847,8 +841,7 @@ function UI.RenderBlizzardSpecimen(entry, options)
         else presentation.portrait:SetTexture("Interface\\Icons\\Ability_Hunter_Pet_Bear") end
     end
     if presentation.name then
-        local name = options.subject == "player" and GUF.PreviewPlayerName() or "Beary"
-        name = GUF.UnitNamePart(name, cfg.nameDisplay)
+        local name = data.name
         presentation.name:SetText(name); presentation.name:SetShown(not cfg.hide.name)
         presentation.name:SetTextColor(GUF.PreviewNameColor(entry, options.subject))
         data.name = name
@@ -860,7 +853,7 @@ function UI.RenderBlizzardSpecimen(entry, options)
             if original and publicNumber(original.height) and original.height > 0 then presentation.name:SetHeight(original.height) end
             presentation.name:SetJustifyH(original and original.justify or "LEFT")
         else
-            GUF.StylePresentationText(presentation.name, cfg, cfg.text.name, cfg.text.name.custom and cfg.text.name.size or cfg.nameSize)
+            GUF.StylePresentationText(presentation.name, cfg, cfg.text.name, GUF.PresentationTextSize(cfg, "name", "blizzard"))
             local _, size = presentation.name:GetFont()
             local original = native.textOriginals and native.textOriginals[native.name]
             local height = original and publicNumber(original.height) and original.height or 0
@@ -944,53 +937,20 @@ function UI.RenderBlizzardSpecimen(entry, options)
     stockStatus(presentation, entry, options)
     if options.layoutCard then entry.castBar:Hide()
     else GUF.StyleNativeCastSpecimen(entry, options) end
+    return true
 end
 
 -- General's stock card uses the configurable specimen path, not a second
 -- hard-coded demo. Resolve Blizzard's own settings without switching profiles.
 function UI.BlizzardLayoutCard(parent, entry)
     if not GUF.frames.player then return entry end
-    local profile = GUF.db
-    local layout = profile.general.frameStyle == "blizzard" and profile
-        or profile.layouts and profile.layouts.blizzard or GUF.GetLayoutDefaults("blizzard")
-    local cfg = layout.frames.player
-    entry = entry or GUF.CreateFrameSpecimen("player", parent, true)
+    local layout = GUF.Settings.GetLayout(GUF.db, "blizzard")
+    entry = entry or GUF.CreateFrameSpecimen("player", parent, "blizzard")
     entry.optionsPreview, entry.frame.goodUnitFramesSkin = true, true
-    local powerType, token, powerR, powerG, powerB = UnitPowerType("player")
-    token = not GUF.Secret(token) and token or "MANA"
-    local options = { style = "blizzard", config = cfg, layoutCard = true,
+    local options = { style = "blizzard", settings = layout, layoutCard = true,
         state = "normal", states = {}, group = "solo", subject = "player",
-        showAll = false, health = 100, powerToken = token }
-    GUF.RenderFrameSpecimen(entry, nil, options)
-    UI.RenderBlizzardSpecimen(entry, options)
-    if cfg.healthColor ~= "blizzard" then
-        entry.health:GetStatusBarTexture():SetDesaturated(true)
-        if cfg.healthColor == "percent" and UnitHealthPercent and C_CurveUtil and C_CurveUtil.CreateColorCurve then
-            -- Full-health endpoint of the live native color curve; the card
-            -- uses a full synthetic sample, not a live Health query.
-            GUF.TintPresentationBar(entry.health, .20, .90, .20)
-        else GUF.TintPresentationBar(entry.health, GUF.PreviewHealthColor(entry, "player", entry.previewData.healthPercent)) end
-    end
-    if cfg.bars.powerMode ~= "blizzard" then
-        entry.power:GetStatusBarTexture():SetDesaturated(true)
-        if cfg.bars.powerMode == "class" then GUF.TintPresentationBar(entry.power, GUF.ClassColor("player"))
-        else
-            local color = GUF.powerColors[token]
-            local nativeColor = not GUF.Secret(powerType) and PowerBarColor and PowerBarColor[powerType]
-            if color then GUF.TintPresentationBar(entry.power, unpack(color))
-            elseif nativeColor and publicNumber(nativeColor.r) and publicNumber(nativeColor.g) and publicNumber(nativeColor.b) then
-                GUF.TintPresentationBar(entry.power, nativeColor.r, nativeColor.g, nativeColor.b)
-            elseif publicNumber(powerR) and publicNumber(powerG) and publicNumber(powerB) then
-                GUF.TintPresentationBar(entry.power, powerR, powerG, powerB)
-            else GUF.TintPresentationBar(entry.power, unpack(GUF.powerColors.MANA)) end
-        end
-    end
-    local frame = entry.frame
-    local width, height = frame:GetSize()
-    if publicNumber(width) and publicNumber(height) and width > 0 and height > 0 then
-        frame:SetScale(math.max(.1, math.min(cfg.scale, (parent:GetWidth() - 12) / width, (parent:GetHeight() - 4) / height)))
-        frame:ClearAllPoints(); frame:SetPoint("CENTER", parent)
-    end
+        showAll = false, health = 100 }
+    if GUF.RenderFrameSpecimen(entry, nil, options) == "applied" then GUF.Presentation.FitCard(entry, parent, 4) end
     return entry
 end
 

@@ -1,6 +1,14 @@
 local _, GUF = ...
+
+local function leaseAlpha(region, value, relative)
+    return GUF.RegionAlpha(region, value, relative, "Auras")
+end
+local Client = GUF.Client
 -- Blizzard owns aura data, filtering, sorting, timers, tooltips and cancellation.
 GUF.auraHosts = {}
+-- Addon-created controller hosts only; native aura buttons stay in their
+-- engine providers. Keys contain structural public choices, never aura data.
+GUF.auraHostPools = {}
 
 function GUF.AuraAnchor(cfg)
     local point = (cfg.growV == "TOP" and "BOTTOM" or "TOP")
@@ -10,22 +18,18 @@ end
 
 function GUF.AuraParent(entry, cfg)
     if cfg.anchorPoint == "FREE" then return UIParent end
-    local state = entry.artisticLayout
-    if state and state.active and state.nameArea and cfg.anchorPoint:find("TOP", 1, true) then
-        return state.nameArea
-    end
-    return entry.frame
+    return GUF.Presentation.Role(entry, cfg.anchorPoint:find("TOP", 1, true) and "auraTop" or "auraBottom") or entry.frame
 end
 
 function GUF.AuraPosition(entry, cfg)
-    local state = entry.artisticLayout
+    local gap = GUF.Presentation.Role(entry, "auraTopGap")
     local y = cfg.y
     -- Upper lanes follow the header. Upward-growing roots leave a small gap;
     -- preserve saved offsets and arbitrary legacy anchors underneath this rule.
-    if state and state.active and state.nameArea and cfg.anchorPoint:find("TOP", 1, true)
+    if gap and cfg.anchorPoint:find("TOP", 1, true)
         and cfg.growV == "TOP" then
         local point = GUF.AuraAnchor(cfg)
-        if point:find("BOTTOM", 1, true) then y = math.max(y, 6 * state.scale) end
+        if point:find("BOTTOM", 1, true) then y = math.max(y, gap) end
     end
     -- Cast avoidance is a separate pass over complete, unshifted groups.
     return cfg.x, y
@@ -39,11 +43,18 @@ end
 local function disableHost(host)
     if host then
         host.configured = false
+        host.retired = true
+        host.binding = nil
         host.active = false
         host.container:SetEnabled(false)
         host.container:Hide()
         if host.alternate then disableHost(host.alternate) end
-        if host.anchor then host.anchor:Hide() end
+        host.container:ClearAllPoints()
+        host.container.goodUnitFramesCastAnchor = nil
+        if host.anchor then
+            host.anchor:Hide(); host.anchor:ClearAllPoints()
+            host.anchor.goodUnitFramesCastAnchor = nil
+        end
     end
 end
 
@@ -87,32 +98,38 @@ local function styleButton(record, section, frameCfg)
     if record.duration then
         styleText(record.duration, frameCfg, text.cooldownFontSize, text.cooldownFontColor,
             text.durationPoint, button, 0, text.durationY)
+        record.duration:SetAlpha(cfg.durationText and 1 or 0)
     end
+    record.stack:SetAlpha(cfg.disableStacks and 0 or 1)
+    if record.border then record.border:SetAlpha(cfg.debuffBorder and 1 or 0) end
 end
 
 local function initializeButton(host, sectionIndex, button, enchantment)
+    if host.retired or not GUF.Runtime.IsBinding(host.binding, "auras", host.unit) then return end
     local section = host.sections[sectionIndex]
-    local cfg, frameCfg = section.cfg, GUF.db.frames[host.unit]
+    local cfg, frameCfg = section.cfg, GUF.Runtime.Settings("auras", host.unit).frames[host.unit]
     local icon = button:CreateTexture(nil, "BACKGROUND")
     icon:SetAllPoints(button)
     icon:SetTexCoord(.07, .93, .07, .93)
     button:SetIcon(icon)
-    local cooldown = CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
+    local cooldown = GUF.Runtime.CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
     cooldown:SetAllPoints(button)
     cooldown:SetReverse(true)
     cooldown:SetDrawEdge(false)
     button:SetDurationCooldown(cooldown)
-    local overlay = CreateFrame("Frame", nil, button)
+    local overlay = GUF.Runtime.CreateFrame("Frame", nil, button)
     overlay:SetAllPoints(button)
     overlay:SetFrameLevel(button:GetFrameLevel() + 3)
     local record = { button = button, icon = icon, cooldown = cooldown, sectionIndex = sectionIndex, enchantment = enchantment }
     record.stack = overlay:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
-    if not cfg.disableStacks then button:SetApplicationCount(record.stack, {}) end
-    if cfg.durationText and button.SetDurationText then
+    button:SetApplicationCount(record.stack, {})
+    -- Attach optional presentation once, in the native creation callback.
+    -- Saved toggles change only owned decoration alpha, not provider topology.
+    if button.SetDurationText then
         record.duration = overlay:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         button:SetDurationText(record.duration, {})
     end
-    if section.kind == "debuffs" and cfg.debuffBorder and button.AddDispelTypeTexture then
+    if section.kind == "debuffs" and button.AddDispelTypeTexture then
         local border = overlay:CreateTexture(nil, "OVERLAY")
         border:SetAllPoints(button)
         border:SetTexture("Interface\\Buttons\\UI-Debuff-Overlays")
@@ -223,22 +240,21 @@ end
 local function structure(sections, enchants, singleEnchant)
     local values = { tostring(enchants), tostring(singleEnchant), #sections }
     for _, section in ipairs(sections) do
-        local cfg = section.cfg
         values[#values + 1] = section.kind
-        values[#values + 1] = tostring(cfg.durationText)
-        values[#values + 1] = tostring(cfg.disableStacks)
-        values[#values + 1] = tostring(cfg.debuffBorder)
     end
     return table.concat(values, ":")
 end
 
 local function createHost(entry, sections, enchantSection, singleSlot)
-    local ok, container = pcall(CreateFrame, "AuraContainer", nil, entry.frame, "CustomAuraContainerTemplate")
-    if not ok or not container or not container.AddAuraGroup then
+    local container = Client.CreateAuraContainer(entry.frame)
+    if not container then
         error("Native aura groups are unavailable on this client.")
     end
+    GUF.Updates.stats.auraCreated = (GUF.Updates.stats.auraCreated or 0) + 1
     local host = { container = container, unit = entry.unit, sections = sections, buttons = {},
-        enchantSection = enchantSection, active = false }
+        enchantSection = enchantSection, active = false, binding = GUF.Runtime.Binding("auras", entry) }
+    GUF.Runtime.TrackRegion(container)
+    container.goodUnitFramesNativeController = true
     container:SetEnabled(false)
     container.goodUnitFramesOwned = true
     container:SetSize(1, 1)
@@ -249,7 +265,7 @@ local function createHost(entry, sections, enchantSection, singleSlot)
             local cfg = section.cfg
             container:AddAuraGroup("auras" .. i, section.filter, {
                 maxFrameCount = cfg.perRow * cfg.maxRows,
-                initializeFrame = function(button) initializeButton(host, i, button) end,
+                initializeFrame = function(button) GUF.Runtime.Refresh(host.unit, "auras", initializeButton, host, i, button) end,
                 layout = { elementWidth = section.size, elementHeight = section.size,
                     elementSpacing = cfg.spacing, lineSpacing = cfg.spacing },
             })
@@ -258,12 +274,13 @@ local function createHost(entry, sections, enchantSection, singleSlot)
             local slots = AuraContainerItemEnchantmentSlot or { MainHand = 0, OffHand = 1 }
             for _, slot in ipairs(singleSlot ~= nil and { singleSlot } or { slots.MainHand, slots.OffHand }) do
                 container:AddItemEnchantment(slot, {
-                    initializeFrame = function(button) initializeButton(host, enchantSection, button, true) end,
+                    initializeFrame = function(button) GUF.Runtime.Refresh(host.unit, "auras", initializeButton, host, enchantSection, button, true) end,
                 })
             end
         end
     end)
     if not configured then disableHost(host); error(err) end
+    GUF.Runtime.Constructed()
     return host
 end
 
@@ -284,7 +301,7 @@ local function applyCandidates(container, group, section, unit)
 end
 
 local function configureHost(entry, kind, index, extraKind)
-    local frameCfg = GUF.db.frames[entry.unit]
+    local frameCfg = GUF.Runtime.Settings("auras", entry).frames[entry.unit]
     local cfg = frameCfg.auras[kind][index]
     local sections = sectionsFor(kind, cfg)
     if extraKind then
@@ -303,32 +320,35 @@ local function configureHost(entry, kind, index, extraKind)
     local host = GUF.auraHosts[key]
     local singleEnchant = enchantSection and sections[enchantSection].cfg.perRow * sections[enchantSection].cfg.maxRows == 1 or false
     local signature = structure(sections, enchantSection, singleEnchant)
-    if not host or host.signature ~= signature then
-        disableHost(host)
+    local pool = GUF.auraHostPools[key]
+    if not pool then pool = {}; GUF.auraHostPools[key] = pool end
+    if host and host.signature ~= signature then disableHost(host) end
+    host = pool[signature]
+    if not host then
         local slots = AuraContainerItemEnchantmentSlot or { MainHand = 0, OffHand = 1 }
         host = createHost(entry, sections, enchantSection, singleEnchant and slots.MainHand or nil)
-        -- Keep partially configured containers reachable for cleanup if construction fails.
+        -- Keep partial pairs reachable, but pool only a completely built variant.
         GUF.auraHosts[key] = host
-        if singleEnchant then
-            host.alternate = createHost(entry, sections, enchantSection, slots.OffHand)
-            if not extraKind then
-                host.anchor = CreateFrame("Frame", nil, entry.frame)
-                host.anchor.goodUnitFramesOwned = true
-            end
-        end
+        if singleEnchant then host.alternate = createHost(entry, sections, enchantSection, slots.OffHand) end
         host.signature = signature
+        pool[signature] = host
     else
-        host.sections = sections
-        if host.alternate then host.alternate.sections = sections end
+        GUF.Updates.stats.auraReused = (GUF.Updates.stats.auraReused or 0) + 1
     end
+    GUF.auraHosts[key] = host
+    host.sections = sections
+    if host.alternate then host.alternate.sections = sections end
+    host.retired, host.binding = nil, GUF.Runtime.Binding("auras", entry)
+    if host.alternate then host.alternate.retired, host.alternate.binding = nil, host.binding end
     -- An owned proxy lets cast visibility move aura rows without rebuilding or
     -- repositioning their native containers during combat.
     if not host.anchor then
-        host.anchor = CreateFrame("Frame", nil, entry.frame)
+        host.anchor = GUF.Runtime.CreateFrame("Frame", nil, entry.frame)
         host.anchor.goodUnitFramesOwned = true
         host.anchor:EnableMouse(false)
     end
     if host.anchor then
+        host.anchor:SetParent(entry.frame)
         local point, relative = GUF.AuraAnchor(cfg)
         local x, y = GUF.AuraPosition(entry, cfg)
         host.anchor:ClearAllPoints()
@@ -338,6 +358,8 @@ local function configureHost(entry, kind, index, extraKind)
     end
     for _, nativeHost in ipairs(host.alternate and { host, host.alternate } or { host }) do
         local container = nativeHost.container
+        container:SetParent(entry.frame)
+        container:SetFrameLevel(entry.frame:GetFrameLevel() + 6)
         container:ClearAllPoints()
         local point, relative = GUF.AuraAnchor(cfg)
         if host.anchor then
@@ -393,7 +415,7 @@ local function configureHost(entry, kind, index, extraKind)
 end
 
 local function configureUnit(entry)
-    local frameCfg, displayed = GUF.db.frames[entry.unit], { buffs = false, debuffs = false }
+    local frameCfg, displayed = GUF.Runtime.Settings("auras", entry).frames[entry.unit], { buffs = false, debuffs = false }
     local auras = frameCfg.auras
     for i = 1, GUF.auraFrameCount do
         local buffs, debuffs = auras.buffs[i], auras.debuffs[i]
@@ -469,11 +491,11 @@ local function enforceNativeAuras(container, state)
         container:SetEnabled(false)
         state.enabledOwned = true
         -- Hide already-created native buttons as well; no aura children are inspected.
-        GUF.RegionAlpha(container, 0)
+        leaseAlpha(container, 0)
         state.alphaOwned = true
     else
         if state.enabledOwned then container:SetEnabled(state.enabled); state.enabledOwned = nil end
-        if state.alphaOwned then GUF.RegionAlpha(container, nil); state.alphaOwned = nil end
+        if state.alphaOwned then leaseAlpha(container, nil); state.alphaOwned = nil end
     end
     state.writing = nil
 end
@@ -484,18 +506,19 @@ local function captureNativeAuraContainer(owner, container)
     if state then return state end
     state = { owner = owner, caps = {}, ownedCaps = {}, enabled = not container.IsEnabled or container:IsEnabled() }
     GUF.nativeAuraStates[container] = state
+    GUF.NativeProperties.Track(container, "auraControllerPresentation", nil, state)
     for _, spec in ipairs({ { "buffs", "SetMaxBuffs", "GetMaxBuffs" }, { "debuffs", "SetMaxDebuffs", "GetMaxDebuffs" } }) do
         local kind, setter, getter = spec[1], spec[2], spec[3]
         if container[getter] then state.caps[kind] = container[getter](container) end
         if container[setter] then
-            hooksecurefunc(container, setter, function(_, value)
+            GUF.NativeProperties.Hook("Auras:1", container, setter, function(_, value)
                 if state.writing then return end
                 state.caps[kind] = value
                 if state.buffs or state.debuffs then enforceNativeAuras(container, state) end
             end)
         end
     end
-    hooksecurefunc(container, "SetEnabled", function(_, value)
+    GUF.NativeProperties.Hook("Auras:2", container, "SetEnabled", function(_, value)
         if state.writing then return end
         state.enabled = value
         if state.buffs and state.debuffs then enforceNativeAuras(container, state) end
@@ -511,19 +534,19 @@ function GUF.ApplyNativeAuraVisibility()
     GUF.nativeAuraApplying = true
     GUF.nativeAuraOwnerHooks = GUF.nativeAuraOwnerHooks or {}
     local active = {}
-    for unit, owner in pairs({ target = TargetFrame, focus = FocusFrame }) do
-        local container = owner.GetAuraContainer and owner:GetAuraContainer()
+    for unit, owner in pairs(Client.NativeAuraOwners()) do
+        local container = Client.ResolveAuraContainer(owner)
         if container and container.SetEnabled and not container.goodUnitFramesOwned
             and not (container.IsForbidden and container:IsForbidden()) then
             local state = captureNativeAuraContainer(owner, container)
             active[container] = true
             local replace = GUF.nativeAuraDesired and GUF.nativeAuraDesired[unit]
-            state.buffs = GUF.db.hideBlizzard.buffs or replace
-            state.debuffs = GUF.db.hideBlizzard.debuffs or replace
+            state.buffs = GUF.Runtime.Settings("auras").hideBlizzard.buffs or replace
+            state.debuffs = GUF.Runtime.Settings("auras").hideBlizzard.debuffs or replace
             enforceNativeAuras(container, state)
         end
         if owner.ConfigureAuraContainer and not GUF.nativeAuraOwnerHooks[owner] then
-            hooksecurefunc(owner, "ConfigureAuraContainer", GUF.ApplyNativeAuraVisibility)
+            GUF.NativeProperties.Hook("Auras:3", owner, "ConfigureAuraContainer", GUF.ApplyNativeAuraVisibility)
             GUF.nativeAuraOwnerHooks[owner] = true
         end
     end
@@ -537,15 +560,28 @@ function GUF.ApplyNativeAuraVisibility()
     GUF.nativeAuraApplying = nil
 end
 
-function GUF.ApplyAuras()
-    GUF.auraError, GUF.nativeAuraDesired = nil, {}
-    if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_AuraContainer") end
+function GUF.ApplyAuras(selectedUnits)
+    GUF.auraError = nil
+    GUF.nativeAuraDesired = GUF.nativeAuraDesired or {}
+    Client.LoadAuraContainerModule()
     for _, unit in ipairs(GUF.order) do
         local entry = GUF.frames[unit]
-        if entry then
+        if selectedUnits and not selectedUnits[unit] then
+            -- The shared family acquired a new snapshot. Untouched public
+            -- descriptors remain valid; late native allocations need its token.
+            for _, kind in ipairs({ "buffs", "debuffs" }) do
+                for i = 1, GUF.auraFrameCount do
+                    local host = GUF.auraHosts[unit .. kind .. i]
+                    if host and host.configured then
+                        host.binding = GUF.Runtime.Binding("auras", unit)
+                        if host.alternate then host.alternate.binding = host.binding end
+                    end
+                end
+            end
+        elseif entry then
             local ok, displayed = pcall(configureUnit, entry)
-            if not ok then GUF.auraError = tostring(displayed) end
-            local cfg = GUF.db.frames[unit]
+            if not ok then GUF.auraError = "native-aura-configuration" end
+            local cfg = GUF.Runtime.Settings("auras", unit).frames[unit]
             if unit == "target" then
                 GUF.nativeAuraDesired[unit] = ok and displayed and cfg.auras.replaceDefault
             end
@@ -560,12 +596,15 @@ function GUF.ApplyAuras()
         GUF.nativeAuraDesired = {}
     end
     GUF.ApplyNativeAuraVisibility()
-    GUF.ApplyPrivateAuras()
+    local privateStatus, privateReason
+    if not selectedUnits or selectedUnits.player then privateStatus, privateReason = GUF.ApplyPrivateAuras() end
     GUF.SyncAuraPreviewVisibility()
     if GUF.auraError and not GUF.auraErrorReported then
         GUF.Print("Aura customization could not start. " .. GUF.auraError)
         GUF.auraErrorReported = true
     end
+    if GUF.auraError then return "failed", "native-aura-configuration" end
+    if privateStatus == "failed" then return privateStatus, privateReason end
 end
 
 function GUF.RefreshUnitAuras(unit)

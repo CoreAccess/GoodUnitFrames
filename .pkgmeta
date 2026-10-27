@@ -8,7 +8,21 @@ ignore:
   - README.md
   - .github
   - .gitignore
+  - .pkgmeta
   - AGENTS.md
   - DESIGN.md
+  - AddonConcepts.md
   - TODO.md
   - concept-art
+  - tools
+  - dist
+  - build
+  - backups
+  - .guf-rollbacks
+  - WTF
+  - SavedVariables
+  - .codex
+  - .agents
+  - .vscode
+  - .idea
+  - .gitattributes

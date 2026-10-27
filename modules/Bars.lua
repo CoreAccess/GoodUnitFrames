@@ -33,7 +33,7 @@ end
 function GUF.ApplyBars(entry)
     if entry.barStyleWriting then return end
     entry.barStyleWriting = true
-    local cfg = GUF.db.frames[entry.unit]
+    local cfg = GUF.Runtime.Settings("bars", entry).frames[entry.unit]
     entry.barStyles = entry.barStyles or {}
     for _, kind in ipairs({ "health", "power" }) do
         local bar = entry[kind]
@@ -44,7 +44,10 @@ function GUF.ApplyBars(entry)
                 state = { texture = texture and texture:GetTexture(), coords = texture and { texture:GetTexCoord() },
                     atlas = texture and texture.GetAtlas and texture:GetAtlas() }
                 entry.barStyles[kind] = state
-                hooksecurefunc(bar, "SetStatusBarTexture", function()
+                GUF.NativeProperties.Track(bar, "barMedia", entry, state)
+            end
+            if not state.hooked then
+                GUF.NativeProperties.Hook("Bars:1", bar, "SetStatusBarTexture", function()
                     if state.writing or entry.barStyleWriting then return end
                     local current = bar:GetStatusBarTexture()
                     state.texture = current and current:GetTexture()
@@ -52,17 +55,17 @@ function GUF.ApplyBars(entry)
                     state.atlas = current and current.GetAtlas and current:GetAtlas()
                     GUF.ApplyBars(entry)
                 end)
+                state.hooked = true
             end
             local fill = bar:GetStatusBarTexture()
             state.fillHooks = state.fillHooks or {}
             if fill and not state.fillHooks[fill] then
-                state.fillHooks[fill] = true
-                hooksecurefunc(fill, "SetAtlas", function()
+                GUF.NativeProperties.Hook("Bars:2", fill, "SetAtlas", function()
                     if state.writing or entry.barStyleWriting then return end
                     state.texture, state.coords, state.atlas = fill:GetTexture(), { fill:GetTexCoord() }, fill:GetAtlas()
-                    if entry.artisticLayout and entry.artisticLayout.active then
+                    if GUF.Presentation.Role(entry, "ownedBars") then
                         GUF.ApplyBars(entry)
-                    elseif GUF.db.general.frameStyle == "blizzard" and entry.unit == "target" then
+                    elseif GUF.Runtime.Settings("bars", entry).general.frameStyle == "blizzard" and entry.unit == "target" then
                         -- Classification replaces the atlas after native color
                         -- updates. Reapply saved media/tint to the new artwork.
                         GUF.ApplyBars(entry)
@@ -74,14 +77,14 @@ function GUF.ApplyBars(entry)
                         if state.writing or entry.barStyleWriting or entry.coloring or entry.powerColoring then return end
                         GUF.QueueTargetColorRefresh(entry)
                     end
-                    hooksecurefunc(fill, "SetDesaturated", tintChanged)
-                    hooksecurefunc(fill, "SetVertexColor", tintChanged)
+                    GUF.NativeProperties.Hook("Bars:3", fill, "SetDesaturated", tintChanged)
+                    GUF.NativeProperties.Hook("Bars:4", fill, "SetVertexColor", tintChanged)
                 end
+                state.fillHooks[fill] = true
             end
             local texture = GUF.MediaTexture(cfg.bars[kind .. "Texture"])
             state.writing = true
-            local artistic = entry.artisticLayout
-            local render = artistic and artistic.active and artistic.renderBars and artistic.renderBars[kind]
+            local render = GUF.Presentation.Role(entry, "ownedBars") and GUF.Presentation.Role(entry, kind)
             if render then
                 -- Target styling belongs to the presentation bar. Rewriting the
                 -- hidden source also refreshes native feedback/copy textures at
@@ -127,8 +130,7 @@ function GUF.ApplyBars(entry)
     end
     -- Replacing a baked-color stock atlas with neutral media also requires its
     -- Blizzard hue. Keep the independent owned Target renderer out of this path.
-    local artistic = entry.artisticLayout
-    if not (artistic and artistic.active and artistic.renderBars) then GUF.UpdateColors(entry) end
+    if not GUF.Presentation.Role(entry, "ownedBars") then GUF.UpdateColors(entry) end
     if GUF.RefreshClassResourceTexture then GUF.RefreshClassResourceTexture(entry) end
     entry.barStyleWriting = nil
 end

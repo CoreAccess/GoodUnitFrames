@@ -10,18 +10,19 @@ function UI.IndicatorCategories(unit)
     if artistic then categories[#categories + 1] = { "loot", "Master loot" } end
     categories[#categories + 1] = { "feedback", "Combat text" }
     if unit == "player" and GUF.SupportsClassResources() and capabilities.classResources then categories[#categories + 1] = { "resource", "Class resources" } end
-    if unit == "target" and GUF.db.general.frameStyle ~= "blizzard" then categories[#categories + 1] = { "threat", "Threat" } end
+    if capabilities.threat then categories[#categories + 1] = { "threat", "Threat" } end
     return categories
 end
 
 UI.textCategories = { { "name", "Name" }, { "health", "Health text" }, { "power", "Power text" } }
 
 function UI.TextCategories(unit)
+    local capabilities = UI.LayoutCapabilities(unit)
     local categories = GUF.Copy(UI.textCategories)
-    if GUF.db.general.frameStyle == "blizzard" and (unit == "player" or unit == "target") then
+    if capabilities.levelText then
         table.insert(categories, 2, { "level", "Level" })
     end
-    if unit == "target" and GUF.db.general.frameStyle ~= "blizzard" then categories[#categories + 1] = { "threat", "Threat" } end
+    if capabilities.threat then categories[#categories + 1] = { "threat", "Threat" } end
     return categories
 end
 

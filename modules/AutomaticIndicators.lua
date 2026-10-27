@@ -47,20 +47,20 @@ function GUF.PrepareAutomaticIndicators(entry)
     state.automaticHooks = state.automaticHooks or {}
     local function observe(region)
         if not region or state.automaticHooks[region] then return end
-        state.automaticHooks[region] = true
         local function refresh()
             if state.active and not state.automaticWriting and not entry.layoutWriting then
                 GUF.UpdateAutomaticIndicators(entry)
             end
         end
         for _, method in ipairs({ "Show", "Hide", "SetShown", "SetAlpha", "SetTexture", "SetAtlas", "SetTexCoord" }) do
-            if type(region[method]) == "function" then hooksecurefunc(region, method, refresh) end
+            if type(region[method]) == "function" then GUF.NativeProperties.Hook("AutomaticIndicators:1", region, method, refresh) end
         end
-        if region.HookScript then region:HookScript("OnShow", refresh); region:HookScript("OnHide", refresh) end
+        if region.HookScript then GUF.NativeProperties.HookScript("AutomaticIndicators:script:1", region, "OnShow", refresh); GUF.NativeProperties.HookScript("AutomaticIndicators:script:2", region, "OnHide", refresh) end
+        state.automaticHooks[region] = true
     end
     for _, source in pairs(GUF.AutomaticIndicatorSources(entry)) do
         state.hidden[source] = true
-        GUF.RegionAlpha(source, 0)
+        GUF.RegionAlpha(source, 0, false, "ArtisticLayout")
         observe(source); observe(iconRegion(source))
     end
 end
@@ -91,7 +91,7 @@ function GUF.UpdateAutomaticIndicators(entry)
         local badge = state.badges[kind]
         if not state.hidden[source] then
             -- Late native allocations wait for the ordinary safe apply pass.
-            GUF.pending = true
+            GUF.QueueRecovery("native-indicator", entry)
         elseif icon and icon.GetTexture then
             GUF.PositionAutomaticBadge(entry, kind)
             if GUF.CopyBlizzardTexture(icon, badge.icon) then

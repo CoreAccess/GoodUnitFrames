@@ -2,85 +2,23 @@ local _, GUF = ...
 -- Feature module for the existing Blizzard unit frames.
 local unpack = unpack or table.unpack
 
-local function path(root, ...)
-    for i = 1, select("#", ...) do
-        if not root then return nil end
-        root = root[select(i, ...)]
-    end
-    return root
-end
+local Client = GUF.Client
 
+-- Keep managed-unit policy in the runtime; the adapter only discovers native
+-- objects. Legacy consumers continue to receive the descriptor/reference alone.
 function GUF.Resolve(unit)
     if not GUF.IsManagedUnit(unit) then return end
-    local frame
-    if unit == "player" then frame = PlayerFrame
-    elseif unit == "target" then frame = TargetFrame end
-    if not frame then return end
-    local player = unit == "player"
-    local main = player and path(frame, "PlayerFrameContent", "PlayerFrameContentMain")
-        or path(frame, "TargetFrameContent", "TargetFrameContentMain") or frame
-    local context = player and path(frame, "PlayerFrameContent", "PlayerFrameContentContextual")
-        or path(frame, "TargetFrameContent", "TargetFrameContentContextual") or frame
-    local container = frame.PlayerFrameContainer or frame.TargetFrameContainer or frame
-    local healthArea = main.HealthBarsContainer or main
-    local health = healthArea.HealthBar or frame.healthbar or frame.HealthBar or _G[frame:GetName() .. "HealthBar"]
-    local power = path(main, "ManaBarArea", "ManaBar") or main.ManaBar or frame.manabar or frame.ManaBar
-        or _G[frame:GetName() .. "ManaBar"]
-    local name = frame.name or main.Name or frame.Name or (player and PlayerName) or _G[frame:GetName() .. "Name"]
-    local priestMana = false
-    if player and GUF.isRetail then
-        local _, class = UnitClass("player")
-        priestMana = not GUF.Secret(class) and class == "PRIEST"
-    end
-    return {
-        frame = frame, unit = unit, health = health, power = power, name = name,
-        nameBackground = main.ReputationColor or frame.ReputationColor or frame.nameBackground
-            or _G[frame:GetName() .. "NameBackground"],
-        healthArea = healthArea, main = main, context = context,
-        feedbackRegions = { path(main, "HitIndicator", "HitText"), path(frame, "HitIndicator", "HitText"),
-            frame.feedbackText, unit == "pet" and PetHitIndicator or nil },
-        regions = {
-            level = { main.LevelText, player and PlayerLevelText or frame.LevelText,
-                main.LevelBackgroundCircle, context.HighLevelTexture },
-            pvp = { context.PVPIcon, context.PvpIcon, context.PrestigePortrait, context.PrestigeBadge,
-                main.PvpBackgroundCircle, main.PvpBackgroundIcon, context.PvpBackgroundCircle, context.PvpBackgroundIcon,
-                frame.pvpIcon, player and PlayerPVPIcon or nil, unit == "pet" and PetPVPIcon or nil },
-            leader = { context.LeaderIcon, context.GuideIcon, context.GroupIndicator, frame.leaderIcon,
-                player and PlayerLeaderIcon or nil },
-            combat = { main.StatusTexture, container.FrameFlash, container.Flash, frame.statusTexture,
-                context.AttackIcon, frame.AttackIcon, player and PlayerAttackIcon or nil },
-            resting = { context.PlayerRestIcon, context.PlayerRestLoop, player and PlayerRestIcon or nil },
-            resource = player and { RogueComboPointBarFrame, DruidComboPointBarFrame, ComboFrame,
-                PaladinPowerBarFrame, RuneFrame, WarlockPowerFrame, MageArcaneChargesFrame,
-                MonkHarmonyBarFrame, EssencePlayerFrame, GUF.isRetail and DemonHunterSoulFragmentsBar or nil,
-                GUF.isRetail and MonkStaggerBar or nil, GUF.isRetail and EvokerEbonMightBar or nil,
-                priestMana and AlternatePowerBar or nil, priestMana and InsanityBarFrame or nil } or {},
-        },
-    }
+    local resolved = Client.ResolveUnitFrame(unit)
+    return resolved
 end
 
--- Native attachments remain read-only anchor targets for existing saved Player
--- or Target positions. Resolving them here never creates a managed entry.
 function GUF.AnchorFrame(unit)
-    if unit == "pet" then return PetFrame end
-    if unit == "targettarget" then return TargetFrameToT or (TargetFrame and TargetFrame.totFrame) end
-    local resolved = GUF.Resolve(unit)
-    return resolved and resolved.frame
+    local frame = Client.ResolveAnchorFrame(unit)
+    return frame
 end
 
-function GUF.IsUnmanagedUnitFrame(frame)
-    return frame and (frame == PetFrame or frame == TargetFrameToT or frame == (TargetFrame and TargetFrame.totFrame))
-end
-
-function GUF.PlayerRoleRegions(entry)
-    if entry.unit ~= "player" then return end
-    local frame, main, context = entry.frame, entry.main, entry.context
-    local container = frame.PlayerFrameContainer or frame
-    local role = context.RoleIcon or main.RoleIcon or context.GroupRoleIcon
-        or frame.RoleIcon or frame.roleIcon or PlayerRoleIcon
-    local portrait = container.PlayerPortrait or container.Portrait or frame.portrait or frame.Portrait or PlayerPortrait
-    return role, portrait
-end
+GUF.IsUnmanagedUnitFrame = Client.IsUnmanagedUnitFrame
+GUF.PlayerRoleRegions = Client.ResolvePlayerRoleRegions
 
 -- Shared default for the native Player role and its owned specimen copy.
 function GUF.PlayerRolePoints(portrait)
@@ -206,7 +144,6 @@ function GUF.NPCHealthColor(unit)
     return unpack(GUF.npcHealthColors.neutral)
 end
 
-local healthCurve
 function GUF.UnitOffline(unit)
     if not UnitIsConnected then return false end
     local connected = UnitIsConnected(unit)
@@ -226,20 +163,14 @@ function GUF.HealthColor(unit, cfg)
     if npcTapDenied(unit) then return unpack(GUF.colors.tapped) end
     if cfg.healthColor == "static" then return unpack(cfg.customHealth) end
     if cfg.healthColor == "percent" then
-        if UnitHealthPercent and C_CurveUtil and C_CurveUtil.CreateColorCurve then
-            if not healthCurve then
-                healthCurve = C_CurveUtil.CreateColorCurve()
-                healthCurve:AddPoint(0, CreateColor(.90, 0, 0))
-                healthCurve:AddPoint(.5, CreateColor(.93, .93, 0))
-                healthCurve:AddPoint(1, CreateColor(.20, .90, .20))
-            end
-            local color = UnitHealthPercent(unit, true, healthCurve)
+        local curve = UnitHealthPercent and GUF.HealthPercentCurve()
+        if curve then
+            local color = UnitHealthPercent(unit, true, curve)
             return color:GetRGB()
         end
         local health, maximum = UnitHealth(unit), UnitHealthMax(unit)
         if not GUF.Secret(health) and not GUF.Secret(maximum) and maximum > 0 then
-            local ratio = math.max(0, math.min(1, health / maximum))
-            return math.min(1, 2 * (1 - ratio)), math.min(1, 2 * ratio), 0
+            return GUF.HealthPercentColor(health / maximum)
         end
     end
     if UnitIsPlayer(unit) then return GUF.ClassColor(unit) end
@@ -248,38 +179,6 @@ function GUF.HealthColor(unit, cfg)
     if cfg.healthColor == "class" then return GUF.NPCHealthColor(unit) end
     if npcEngagedWithGroup(unit) then return unpack(GUF.colors.hostile) end
     return GUF.ReactionColor(unit)
-end
-
--- Keep each cosmetic alpha through Blizzard updates; remember its latest native value for restoration.
-local function regionAlphaValue(state)
-    if state.override == nil then return state.native end
-    if state.relative then
-        if GUF.Secret(state.native) then return state.native end
-        return state.native * state.override
-    end
-    return state.override
-end
-
-function GUF.RegionAlpha(region, alpha, relative)
-    if not region or not region.SetAlpha then return end
-    if not GUF.alphaStates then GUF.alphaStates = {} end
-    local state = GUF.alphaStates[region]
-    if not state then
-        state = { native = region:GetAlpha() }
-        GUF.alphaStates[region] = state
-        hooksecurefunc(region, "SetAlpha", function(self, native)
-            if state.writing then return end
-            state.native = native
-            if state.override ~= nil then
-                state.writing = true
-                self:SetAlpha(regionAlphaValue(state))
-                state.writing = nil
-            end
-        end)
-    end
-    state.override, state.relative, state.writing = alpha, relative, true
-    region:SetAlpha(regionAlphaValue(state))
-    state.writing = nil
 end
 
 local function nativeTexts(entry, kind)
@@ -368,13 +267,16 @@ local function tintBlizzardTexture(entry, kind)
 end
 
 function GUF.QueueTargetColorRefresh(entry)
-    if entry.unit ~= "target" or entry.targetColorQueued or GUF.db.general.frameStyle ~= "blizzard" then return end
-    entry.targetColorQueued = true
+    if entry.unit ~= "target" or entry.targetColorQueued or GUF.Runtime.Settings("colors", entry).general.frameStyle ~= "blizzard" then return end
+    local binding = GUF.Runtime.Binding("colors", entry)
+    if not binding then GUF.QueueRecovery("target-color-binding", entry); return end
+    entry.targetColorQueued = binding
     C_Timer.After(0, function()
+        if entry.targetColorQueued ~= binding then return end
         entry.targetColorQueued = nil
-        if GUF.db.general.frameStyle ~= "blizzard" or GUF.editing then return end
-        local artistic = entry.artisticLayout
-        if artistic and artistic.active and artistic.renderBars then return end
+        if not GUF.Runtime.IsBinding(binding, "colors", entry) then return end
+        if GUF.Runtime.Settings("colors", entry).general.frameStyle ~= "blizzard" or GUF.editing then return end
+        if GUF.Presentation.Role(entry, "ownedBars") then return end
         -- Native retarget/classification work can finish after our unit event.
         -- Refresh tint only from the current unit, never native values/geometry.
         GUF.UpdateColors(entry)
@@ -382,11 +284,10 @@ function GUF.QueueTargetColorRefresh(entry)
 end
 
 function GUF.UpdateColors(entry)
-    local cfg = GUF.db.frames[entry.unit]
+    local cfg = GUF.Runtime.Settings("colors", entry).frames[entry.unit]
     if not UnitExists(entry.unit) then return end
     local unit = entry.frame.unit or entry.unit
-    local artistic = entry.artisticLayout
-    local rendered = artistic and artistic.active and artistic.renderBars
+    local rendered = GUF.Presentation.Role(entry, "ownedBars")
     if cfg.bars.powerMode ~= "blizzard" then entry.inactivePowerTint = nil end
     if rendered then
         GUF.SyncArtisticRenderedBar(entry, "health")
@@ -426,48 +327,14 @@ function GUF.UpdateColors(entry)
     end
 end
 
-function GUF.ApplyPosition(entry)
-    if InCombatLockdown() or GUF.editing or entry.editPositionPending or entry.positionWriting then return end
-    local cfg, frame = GUF.db.frames[entry.unit], entry.frame
-    if not entry.original.points or entry.positionCapturePending then
-        local points = GUF.ReadPoints(frame)
-        if not points then GUF.pending = true; return end
-        entry.original.points, entry.positionCapturePending = points, nil
-    end
-    entry.positionWriting = true
-    if cfg.position.enabled then
-        local anchor = cfg.position.anchorTo
-        local allowed = GUF.CanAnchor(entry.unit, anchor)
-        if allowed == nil then entry.positionWriting = nil; GUF.pending = true; return end
-        if not allowed then anchor = "UIParent"; cfg.position.anchorTo = anchor end
-        local relative = anchor == "UIParent" and UIParent or GUF.AnchorFrame(anchor)
-        local frameScale, screenScale = frame:GetEffectiveScale(), UIParent:GetEffectiveScale()
-        if GUF.Secret(frameScale) or GUF.Secret(screenScale) or frameScale <= 0 then entry.positionWriting = nil; return end
-        frame:ClearAllPoints()
-        local coordinateScale = screenScale / frameScale
-        frame:SetPoint(cfg.position.point, relative, cfg.position.relativePoint, cfg.position.x * coordinateScale, cfg.position.y * coordinateScale)
-        entry.positionOwned = true
-    elseif entry.unit == "pet" and GUF.db.general.frameStyle == "artistic"
-        and GUF.frames.player and GUF.CanAnchor("pet", "player") == true then
-        local frameScale, screenScale = frame:GetEffectiveScale(), UIParent:GetEffectiveScale()
-        if GUF.Secret(frameScale) or GUF.Secret(screenScale) or frameScale <= 0 then entry.positionWriting = nil; return end
-        frame:ClearAllPoints()
-        frame:SetPoint("TOPLEFT", GUF.frames.player.frame, "BOTTOMLEFT", 0,
-            -GUF.ArtisticPetOffset() * GUF.db.frames.player.scale * screenScale / frameScale)
-        entry.positionOwned = true
-    elseif entry.positionOwned then
-        frame:ClearAllPoints()
-        for _, point in ipairs(entry.original.points) do frame:SetPoint(unpack(point)) end
-        entry.positionOwned = nil
-    end
-    entry.positionWriting = nil
-end
 
 local function makeEntry(unit)
-    local entry = GUF.Resolve(unit)
+    local entry = GUF.frames[unit] or GUF.Resolve(unit)
     if not entry then return end
+    GUF.frames[unit] = entry
+    if entry.initialized then return entry end
     local frame = entry.frame
-    entry.original = { points = GUF.ReadPoints(frame), width = frame:GetWidth(), height = frame:GetHeight() }
+    entry.original = entry.original or { points = GUF.ReadPoints(frame), width = frame:GetWidth(), height = frame:GetHeight() }
     if entry.name then
         entry.original.nameColor = { entry.name:GetTextColor() }
         if unit ~= "pet" then
@@ -477,10 +344,10 @@ local function makeEntry(unit)
                 entry.original.nameText = entry.name:GetText()
                 GUF.UpdateUnitName(entry)
             end
-            hooksecurefunc(entry.name, "SetText", nativeNameChanged)
-            hooksecurefunc(entry.name, "SetFormattedText", nativeNameChanged)
+            GUF.NativeProperties.Hook("Frames:1", entry.name, "SetText", nativeNameChanged)
+            GUF.NativeProperties.Hook("Frames:2", entry.name, "SetFormattedText", nativeNameChanged)
         end
-        hooksecurefunc(entry.name, "SetTextColor", function()
+        GUF.NativeProperties.Hook("Frames:3", entry.name, "SetTextColor", function()
             if not entry.nameColoring then
                 entry.original.nameColor = { entry.name:GetTextColor() }
                 GUF.UpdateColors(entry)
@@ -495,7 +362,7 @@ local function makeEntry(unit)
                 local texture = bar:GetStatusBarTexture()
                 entry.original.healthDesaturated = texture and texture.IsDesaturated and texture:IsDesaturated() or false
                 if bar.SetStatusBarDesaturated then
-                    hooksecurefunc(bar, "SetStatusBarDesaturated", function(_, desaturated)
+                    GUF.NativeProperties.Hook("Frames:4", bar, "SetStatusBarDesaturated", function(_, desaturated)
                         if entry.coloring then return end
                         entry.original.healthDesaturated = desaturated
                         GUF.UpdateColors(entry)
@@ -505,90 +372,155 @@ local function makeEntry(unit)
                 local texture = bar:GetStatusBarTexture()
                 entry.original.powerDesaturated = texture and texture.IsDesaturated and texture:IsDesaturated() or false
                 if bar.SetStatusBarDesaturated then
-                    hooksecurefunc(bar, "SetStatusBarDesaturated", function(_, desaturated)
+                    GUF.NativeProperties.Hook("Frames:5", bar, "SetStatusBarDesaturated", function(_, desaturated)
                         if entry.powerColoring then return end
                         entry.original.powerDesaturated = desaturated
                         GUF.UpdateColors(entry)
                     end)
                 end
             end
-            entry[kind .. "Text"] = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            entry[kind .. "Text"] = entry[kind .. "Text"] or GUF.Runtime.TrackRegion(bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"))
             entry[kind .. "Text"].goodUnitFramesOwned = true
             entry[kind .. "Text"]:SetPoint("CENTER", bar, "CENTER")
             entry[kind .. "Text"]:SetDrawLayer("OVERLAY", 7)
-            hooksecurefunc(bar, "SetStatusBarColor", function()
+            GUF.NativeProperties.Hook("Frames:6", bar, "SetStatusBarColor", function()
                 if not entry.coloring and not entry.powerColoring then
                     entry.original[kind .. "Color"] = { bar:GetStatusBarColor() }
                     GUF.UpdateColors(entry)
                 end
             end)
             if bar.HookScript then
-                bar:HookScript("OnValueChanged", function() GUF.UpdateBarText(entry, kind) end)
+                GUF.NativeProperties.HookScript("Frames:script:1", bar, "OnValueChanged", function() GUF.UpdateBarText(entry, kind) end)
             end
         end
     end
-    hooksecurefunc(frame, "SetPoint", function()
-        if entry.scaleWriting then return end
-        if not entry.positionWriting and (not entry.positionOwned or GUF.editing or entry.editPositionPending) then
+    GUF.NativeProperties.Hook("Frames:7", frame, "SetPoint", function()
+        if entry.scaleWriting or entry.positionWriting then return end
+        local forbidden = frame.IsForbidden and frame:IsForbidden()
+        if GUF.Secret(forbidden) or forbidden then
+            entry.positionCapturePending = true; GUF.QueueRecovery("position-capture", entry); return
+        end
+        if not entry.positionOwned or GUF.editing or entry.editPositionPending then
             local points = GUF.ReadPoints(frame)
             if points then entry.original.points, entry.positionCapturePending = points, nil
             else entry.positionCapturePending = true end
         end
         GUF.ApplyPosition(entry)
     end)
-    frame:HookScript("OnShow", function()
+    GUF.NativeProperties.HookScript("Frames:script:2", frame, "OnShow", function()
         GUF.UpdateColors(entry)
         GUF.UpdateUnitName(entry)
         GUF.UpdateBarText(entry, "health")
         GUF.UpdateBarText(entry, "power")
         GUF.ApplyPosition(entry)
-        if entry.sizeOwned or (entry.artisticLayout and entry.artisticLayout.active) then GUF.pending = true end
+        if entry.sizeOwned or GUF.Presentation.Role(entry, "ownedBars")
+            or GUF.Layouts.NeedsLiveApply(entry) then GUF.QueueRecovery("unit-show", entry) end
     end)
     GUF.CaptureSize(entry)
     GUF.CaptureBlizzardArtwork(entry)
+    entry.initialized = true
+    GUF.Runtime.Constructed()
     return entry
 end
 
-function GUF.ApplyFrames()
+local function applyEntry(entry, layout, request)
+    local transitions, runtime = GUF.LayoutTransitions, GUF.Runtime
+    local lifecycle = transitions.BeginEntry(entry, layout, request)
+    if not lifecycle then return false end
+    local function stage(family, fn, ...)
+        local ok, reason = runtime.Apply(entry, family, request, fn, ...)
+        if not ok then transitions.EntryIncomplete(entry, request, family, reason) end
+        return ok
+    end
+    if not stage("construction", makeEntry, entry.unit) then return false end
+    if not stage("colors", GUF.UpdateColors, entry) then return false end
+    if not stage("rootFading", function()
+        lifecycle.fadingStatus, lifecycle.fadingReason = GUF.ApplyFrameFading(entry, request)
+        return lifecycle.fadingStatus, lifecycle.fadingReason
+    end) then return false end
+    if not stage("scale", function()
+        lifecycle.scaleStatus, lifecycle.scaleReason = GUF.ApplyFrameScale(entry, false, request)
+        return lifecycle.scaleStatus, lifecycle.scaleReason
+    end) then return false end
+    if not transitions.IsCurrent(request, layout.id) then return false end
+    if not stage("position", function()
+        lifecycle.positionStatus, lifecycle.positionReason = GUF.ApplyPosition(entry, request)
+        return lifecycle.positionStatus, lifecycle.positionReason
+    end) then return false end
+    if not transitions.IsCurrent(request, layout.id) then return false end
+    if lifecycle.scaleStatus ~= "applied" or lifecycle.positionStatus ~= "applied" or lifecycle.fadingStatus ~= "applied" then
+        transitions.EntryIncomplete(entry, request, "root", lifecycle.scaleReason or lifecycle.positionReason or lifecycle.fadingReason)
+        return false
+    end
+    if not stage("textCapture", GUF.CaptureText, entry) then return false end
+    -- Release with each acquiring owner's settings/operation, including owners
+    -- which are no longer available. Their cleanup tickets survive supersession.
+    lifecycle.releases = GUF.Layouts.ReleaseOtherLive(entry, layout)
+    transitions.RecordReleases(entry, layout, request, lifecycle.releases)
+    for _, result in pairs(lifecycle.releases) do
+        if result.status == "failed" or result.status == "deferred" then
+            transitions.EntryIncomplete(entry, request, "release", result.reason)
+            return false
+        end
+    end
+    if not stage("size", GUF.ApplySize, entry) and entry.runtimeFailures and entry.runtimeFailures.size then return false end
+    if not transitions.Acquire(entry, layout, request) then return false end
+    if not stage("layout", function()
+        entry.runtimeLayoutAttempts = entry.runtimeLayoutAttempts or {}
+        entry.runtimeLayoutAttempts[layout.id] = runtime.Current()
+        local status, reason = layout.live.apply(entry)
+        lifecycle.applyStatus, lifecycle.applyReason = status or "unreported", reason
+        return status, reason
+    end) then return false end
+    entry.runtimeLayouts = entry.runtimeLayouts or {}
+    entry.runtimeLayouts[layout.id] = runtime.Binding("layout", entry)
+    entry.runtimeLayoutAttempts[layout.id] = nil
+    for _, item in ipairs({ { "artwork", GUF.ApplyArtwork }, { "combatText", GUF.ApplyCombatText },
+        { "bars", GUF.ApplyBars }, { "predictions", GUF.ApplyPredictionBars },
+        { "cast", GUF.ApplyCastBar }, { "text", GUF.ApplyText } }) do
+        if not stage(item[1], item[2], entry) then return false end
+    end
+    if not stage("finalize", GUF.Layouts.FinalizeLive, entry) then return false end
+    if not stage("bars", function()
+        local cfg, original = runtime.Settings("bars", entry).frames[entry.unit], entry.original
+        if cfg.healthColor == "blizzard" and entry.health then
+            entry.coloring = true
+            setHealthDesaturation(entry, original.healthDesaturated)
+            entry.health:SetStatusBarColor(unpack(original.healthColor))
+            entry.coloring = nil
+        end
+        if cfg.bars.powerMode == "blizzard" and entry.power then
+            entry.powerColoring = true
+            setBarDesaturation(entry, "power", original.powerDesaturated)
+            entry.power:SetStatusBarColor(unpack(original.powerColor))
+            entry.powerColoring = nil
+        end
+        GUF.UpdateColors(entry)
+    end) then return false end
+    entry.appliedSettingsRevision = request.revision
+    return transitions.FinishEntry(entry, layout, request, lifecycle)
+end
+
+function GUF.ApplyFrames(request, selectedUnits)
+    local layout = GUF.Layouts.Get(GUF.db.general.frameStyle)
+    if not layout then error("Good Unit Frames cannot apply an unregistered layout.") end
+    local transitions = GUF.LayoutTransitions
+    request = request or transitions.Request(GUF.db, layout.id, true)
+    if not GUF.Runtime.Capture(request) or not GUF.Runtime.CaptureColors(request) or not GUF.CaptureFrameScaleRequest(request)
+        or not GUF.CaptureFramePositionRequest(request) or not GUF.CaptureFrameFadingRequest(request) then
+        GUF.QueueRecovery("frame-inputs"); return false
+    end
+    local complete = true
     for _, unit in ipairs(GUF.order) do
-        local entry = GUF.frames[unit] or makeEntry(unit)
-        GUF.frames[unit] = entry
-        if entry then
-            local cfg, original = GUF.db.frames[unit], entry.original
-            GUF.ApplyFrameScale(entry)
-            GUF.ApplyPosition(entry)
-            GUF.CaptureText(entry)
-            -- Restore the previous skin before capturing/placing the next one.
-            local style = GUF.db.general.frameStyle
-            if style ~= "blizzard" then GUF.ReleaseBlizzardPlayerRole(entry) end
-            if style ~= "artistic" then GUF.ApplyArtisticLayout(entry) end
-            GUF.ApplySize(entry)
-            if style == "artistic" then GUF.ApplyArtisticLayout(entry) end
-            GUF.ApplyArtwork(entry)
-            GUF.ApplyCombatText(entry)
-            GUF.ApplyBars(entry)
-            GUF.ApplyPredictionBars(entry)
-            GUF.ApplyCastBar(entry)
-            GUF.ApplyText(entry)
-            GUF.FinalizeArtisticLayout(entry)
-            if cfg.healthColor == "blizzard" then
-                if entry.health then
-                    entry.coloring = true
-                    setHealthDesaturation(entry, original.healthDesaturated)
-                    entry.health:SetStatusBarColor(unpack(original.healthColor))
-                    entry.coloring = nil
-                end
-            end
-            if cfg.bars.powerMode == "blizzard" then
-                if entry.power then
-                    entry.powerColoring = true
-                    setBarDesaturation(entry, "power", original.powerDesaturated)
-                    entry.power:SetStatusBarColor(unpack(original.powerColor))
-                    entry.powerColoring = nil
-                end
-            end
-            GUF.UpdateColors(entry)
+        if not selectedUnits or selectedUnits[unit] then
+            local entry = GUF.frames[unit] or GUF.Resolve(unit)
+            if entry then
+                GUF.frames[unit] = entry
+                if not applyEntry(entry, layout, request) then complete = false end
+            else complete = false; GUF.QueueRecovery("frame-not-ready") end
+            if not transitions.IsCurrent(request, layout.id) then return false end
         end
     end
     GUF.UpdateFading(0)
+    return complete
 end

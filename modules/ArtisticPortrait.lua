@@ -22,7 +22,7 @@ function GUF.SetArtisticPortraitTexture(texture, unit)
 end
 
 function GUF.CreateArtisticPortrait(entry, state)
-    local viewport = CreateFrame("Frame", nil, state.rim)
+    local viewport = GUF.Runtime.CreateFrame("Frame", nil, state.rim)
     viewport.goodUnitFramesOwned = true
     viewport:EnableMouse(false)
     if viewport.SetClipsChildren then viewport:SetClipsChildren(true) end
@@ -118,7 +118,7 @@ function GUF.UpdateArtisticPortrait(entry)
     local unit = entry.frame.unit or entry.unit
     -- PlayerModel has a rectangular render surface. Use Blizzard's maskable
     -- live portrait texture for this circular pass; preserve the saved 3D option.
-    local wantModel = not state.circular and GUF.db.frames[entry.unit].artistic.portrait3D and state.model ~= nil
+    local wantModel = not state.circular and GUF.Runtime.Settings("layout", entry).frames[entry.unit].artistic.portrait3D and state.model ~= nil
     if not yes(UnitExists(unit)) then GUF.ClearArtisticPortrait(state); return end
     if state.portraitUnit ~= unit or state.wantModel ~= wantModel then state.portraitDirty = true end
     if not state.portraitDirty then
@@ -154,7 +154,7 @@ function GUF.UpdateArtisticPortrait(entry)
 end
 
 -- Refresh on identity/model changes, not on unrelated health/power updates.
-local events = CreateFrame("Frame")
+local events = GUF.Runtime.CreateFrame("Frame")
 for _, event in ipairs({ "UNIT_PORTRAIT_UPDATE", "PORTRAITS_UPDATED", "UNIT_MODEL_CHANGED", "PLAYER_TARGET_CHANGED",
     "UNIT_TARGET", "UNIT_PET", "UNIT_ENTERED_VEHICLE", "UNIT_EXITED_VEHICLE",
     "UNIT_CONNECTION", "UNIT_NAME_UPDATE", "UNIT_CLASSIFICATION_CHANGED",

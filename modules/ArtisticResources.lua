@@ -1,4 +1,8 @@
 local _, GUF = ...
+
+local function leaseAlpha(region, value, relative)
+    return GUF.RegionAlpha(region, value, relative, "ArtisticResources")
+end
 local unpack = unpack or table.unpack
 
 local function number(value)
@@ -99,7 +103,7 @@ local function queue(entry)
     if state and state.active and not state.resourceWriting then
         state.resourcesDirty = true
         state.resourceBlocked = {}
-        GUF.pending = true
+        GUF.DeferRuntime("native-readiness")
     end
 end
 
@@ -129,9 +133,9 @@ function GUF.RestoreArtisticResources(entry)
             for _, point in ipairs(node.points) do node.frame:SetPoint(unpack(point)) end
             node.frame:SetScale(node.scale)
         end
-        for region in pairs(saved.hidden) do GUF.RegionAlpha(region, nil) end
+        for region in pairs(saved.hidden) do leaseAlpha(region, nil) end
     end
-    for controller in pairs(state.resourceSuppressed or {}) do GUF.RegionAlpha(controller, nil) end
+    for controller in pairs(state.resourceSuppressed or {}) do leaseAlpha(controller, nil) end
     state.resourceSuppressed, state.resourceLane = {}, nil
     state.resourceControllers, state.resourceWriting = {}, nil
     if state.resourceRail then state.resourceRail:Hide() end
@@ -141,7 +145,7 @@ function GUF.LayoutArtisticResources(entry)
     if entry.configurationPreview then return end
     local state = entry.artisticLayout
     if not state or not state.active then return end
-    if GUF.Restricted() or GUF.editing then GUF.pending = true; return end
+    if GUF.Restricted() or GUF.editing then GUF.DeferRuntime("native-readiness"); return end
     state.resourcesDirty = nil
     state.resourceBlocked = state.resourceBlocked or {}
     GUF.RestoreArtisticResources(entry)
@@ -163,7 +167,7 @@ function GUF.LayoutArtisticResources(entry)
         end
     end
     if not controller then return end
-    local settings = GUF.db.frames.player.indicators.resource
+    local settings = GUF.Runtime.Settings("layout", "player").frames.player.indicators.resource
     GUF.TransformRegion(controller, settings, false)
     for _, root in pairs(entry.regions.resource) do
         if controller:GetParent() == root then GUF.TransformRegion(root, settings, false) end
@@ -182,13 +186,15 @@ function GUF.LayoutArtisticResources(entry)
         saved.nodes[#saved.nodes + 1] = { frame = node, points = anchors, scale = scale, size = footprint }
     end
     if not state.resourceRail then
-        state.resourceRail = CreateFrame("Frame", nil, state.ornaments)
+        state.resourceRail = GUF.Runtime.CreateFrame("Frame", nil, state.ornaments)
         state.resourceRail.goodUnitFramesOwned = true
         state.resourceRail:EnableMouse(false)
         state.resourceRail.wells, state.resourceRail.links = {}, {}
         state.resourceRail:Hide()
+        GUF.Runtime.Constructed()
     end
     local rail = state.resourceRail
+    rail.wells, rail.links = rail.wells or {}, rail.links or {}
     local count = #points
     local diameter = math.min(18 * state.scale * settings.scale, 20 * state.scale)
     local gap = 2 * state.scale
@@ -208,7 +214,7 @@ function GUF.LayoutArtisticResources(entry)
     for _, other in ipairs(controllers) do
         if other ~= controller then
             state.resourceSuppressed[other] = true
-            GUF.RegionAlpha(other, 0)
+            leaseAlpha(other, 0)
         end
     end
     state.resourceBlocked[controller] = nil
@@ -255,26 +261,26 @@ function GUF.LayoutArtisticResources(entry)
         node.frame:SetPoint("CENTER", rail, "CENTER", x * coreScale / (parentScale * factor),
             y * coreScale / (parentScale * factor))
         if not node.frame.foreverArtisticResourceHooked then
-            hooksecurefunc(node.frame, "SetPoint", function() queue(entry) end)
+            GUF.NativeProperties.Hook("ArtisticResources:1", node.frame, "SetPoint", function() queue(entry) end)
             node.frame.foreverArtisticResourceHooked = true
         end
     end
     for _, region in pairs({ controller:GetRegions() }) do
         if region:GetObjectType() == "Texture" then
             saved.hidden[region] = true
-            GUF.RegionAlpha(region, 0)
+            leaseAlpha(region, 0)
         end
     end
     if not controller.foreverArtisticResourceHooked then
         for _, method in ipairs({ "Layout", "UpdateMax", "UpdateMaxPower", "Setup", "SetUpCurrentPower" }) do
-            if type(controller[method]) == "function" then hooksecurefunc(controller, method, function() queue(entry) end) end
+            if type(controller[method]) == "function" then GUF.NativeProperties.Hook("ArtisticResources:2", controller, method, function() queue(entry) end) end
         end
-        controller:HookScript("OnShow", function() GUF.UpdateArtisticResources(entry); queue(entry) end)
-        controller:HookScript("OnHide", function() GUF.UpdateArtisticResources(entry) end)
+        GUF.NativeProperties.HookScript("ArtisticResources:script:1", controller, "OnShow", function() GUF.UpdateArtisticResources(entry); queue(entry) end)
+        GUF.NativeProperties.HookScript("ArtisticResources:script:2", controller, "OnHide", function() GUF.UpdateArtisticResources(entry) end)
         controller.foreverArtisticResourceHooked = true
     end
     if controller == ComboFrame and not controller.foreverArtisticLegacyHooked then
-        if type(ComboFrame_UpdateMax) == "function" then hooksecurefunc("ComboFrame_UpdateMax", function() queue(entry) end) end
+        if type(ComboFrame_UpdateMax) == "function" then GUF.NativeProperties.Hook("ArtisticResources:3", "ComboFrame_UpdateMax", function() queue(entry) end) end
         controller.foreverArtisticLegacyHooked = true
     end
     state.resourceWriting, state.resourcesDirty = nil, nil
@@ -287,7 +293,7 @@ function GUF.UpdateArtisticResources(entry)
     if entry.unit == "target" or GUF.UsesSegmentedResources("player") then GUF.UpdateComboPoints(entry); return end
     GUF.RestoreComboPoints(entry)
     if entry.unit ~= "player" then return end
-    if state.resourcesDirty then GUF.pending = true end
+    if state.resourcesDirty then GUF.DeferRuntime("native-readiness") end
     -- Controllers can be loaded or become eligible after the initial layout.
     for _, controller in ipairs(candidates()) do
         local preferredRing = targetComboReady(controller)
@@ -296,15 +302,15 @@ function GUF.UpdateArtisticResources(entry)
             and not (state.resourceBlocked and state.resourceBlocked[controller])
             and (preferredRing or yes(controller:IsShown())) and #nodes(controller) > 0 then
             state.resourcesDirty = true
-            GUF.pending = true
+            GUF.DeferRuntime("native-readiness")
         end
     end
     if not state.resourceRail then return end
-    local cfg, visible = GUF.db.frames.player, false
-    for controller in pairs(state.resourceSuppressed or {}) do GUF.RegionAlpha(controller, 0) end
+    local cfg, visible = GUF.Runtime.Settings("layout", "player").frames.player, false
+    for controller in pairs(state.resourceSuppressed or {}) do leaseAlpha(controller, 0) end
     for controller, saved in pairs(state.resourceControllers or {}) do
         if yes(controller:IsVisible()) then visible = true end
-        for region in pairs(saved.hidden) do GUF.RegionAlpha(region, 0) end
+        for region in pairs(saved.hidden) do leaseAlpha(region, 0) end
         -- Mixin versions need not expose the old UpdateMax global. Notice pool
         -- or capacity changes without taking over their live point-state update.
         local active = nodes(controller)
@@ -323,3 +329,103 @@ function GUF.UpdateArtisticResources(entry)
     end
     state.resourceRail:SetShown(visible and not cfg.hide.resource)
 end
+
+-- Reserve an internal row using configured dimensions only. Never change the
+-- secure root, native bars, saved heights or portrait/Level geometry.
+function GUF.LayoutArtisticResourceStack(entry, force)
+    local state, row = entry.artisticLayout, entry.comboRow
+    if not GUF.IsManagedUnit(entry.unit) then return end
+    if not state or not row then return end
+    if not state.active then state.targetComboStack = nil; return end
+    local bars = state.renderBars or entry.configurationPreview and { health = entry.health, power = entry.power }
+    if not bars then return end
+    if not entry.configurationPreview and GUF.editing then GUF.DeferRuntime("native-readiness"); return end
+    local shown = row.displayed == true
+    local previous = state.targetComboStack
+    local lanes = shown and ((row.primaryShown ~= false and 1 or 0) + (row.auxShown and 1 or 0)) or 1
+    lanes = math.max(1, lanes)
+    if not force and previous and previous.shown == shown and previous.noPower == state.noPower
+        and previous.lanes == lanes and previous.primary == row.primaryShown then return end
+    local scale = state.scale
+    local bottom = state.healthY - state.healthRowHeight - state.powerRowHeight
+    local baseHealth = state.noPower and state.healthRowHeight + state.powerRowHeight - state.healthTopInset - 2 * scale
+        or state.healthFillHeight
+    local basePower = state.noPower and 0 or state.powerFillHeight
+    local total = baseHealth + basePower
+    local cfg = GUF.PresentationFrameSettings(entry).indicators.resource
+    local reserve = shown and math.min((8 * cfg.scale + 1) * scale * lanes, total * (lanes > 1 and .45 or .3)) or 0
+    local factor = (total - reserve) / total
+    local healthHeight, powerHeight = baseHealth * factor, basePower * factor
+    local powerY = state.powerY + baseHealth - healthHeight
+    local stack = { shown = shown, noPower = state.noPower, powerY = powerY, lanes = lanes, primary = row.primaryShown,
+        comboY = bottom + 2 * scale + reserve, height = reserve,
+        healthHeight = healthHeight, powerHeight = powerHeight }
+    state.targetComboStack = stack
+    local writing, geometryWriting = entry.layoutWriting, GUF.geometryWriting
+    entry.layoutWriting, GUF.geometryWriting = true, true
+    local inset = 1.5 * scale
+    local x, width = state.housingX + inset, state.housingWidth - 2 * inset
+    stack.x, stack.width = x, width
+    for _, kind in ipairs({ "health", "power" }) do
+        local bar = bars[kind]
+        local y = kind == "health" and state.healthY - state.healthTopInset or powerY - state.dividerHeight
+        local height = kind == "health" and healthHeight or math.max(1, powerHeight)
+        if state.renderBars then GUF.LayoutArtisticRenderedBar(entry, kind, x, y, width, height)
+        else
+            bar:ClearAllPoints(); bar:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", x, y)
+            bar:SetSize(width, height)
+        end
+        local area = state.textAreas[kind]
+        area:ClearAllPoints(); area:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", state.barX + 4 * scale, y)
+        area:SetSize(state.barWidth - 8 * scale, height)
+        local shell = kind == "health" and state.healthShell or state.powerShell
+        if shell then
+            shell:ClearAllPoints(); shell:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", x, y)
+            shell:SetSize(width, height)
+        end
+    end
+    bars.power:SetShown(not state.noPower)
+    if row.integrated then
+        row.baseX, row.baseY = x, stack.comboY
+        row:SetSize(width, math.max(state.dividerHeight, reserve))
+        row:ClearAllPoints(); row:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", row.baseX, row.baseY)
+        -- Divide the visible span at the portrait's curved edge, rather than
+        -- assigning its entire exposed underlap to the final point. All inputs
+        -- are configured geometry; no portrait pixels or live fill bounds.
+        local visibleWidth, hiddenLeft = width, 0
+        local radiusX, radiusY = state.portraitWidth / 2 + scale, state.portraitHeight / 2 + scale
+        local dy = (stack.comboY - reserve / 2 - state.py) / radiusY
+        if math.abs(dy) < 1 then
+            local reach = radiusX * math.sqrt(math.max(0, 1 - dy * dy))
+            if entry.unit == "player" then
+                hiddenLeft = math.max(0, math.min(width - 1, state.px + reach - x))
+                visibleWidth = width - hiddenLeft
+            else
+                local portraitEdge = state.px - reach
+                visibleWidth = math.max(1, math.min(width, portraitEdge - x))
+            end
+        end
+        local segment = math.max(1, visibleWidth / row.capacity)
+        for i = 1, row.capacity do
+            local slot = row.slots[i]
+            local start = hiddenLeft + (i - 1) * segment
+            if entry.unit == "player" and i == 1 then start = 0 end
+            slot:ClearAllPoints(); slot:SetPoint("TOPLEFT", row, "TOPLEFT", start, 0)
+            local underlap = entry.unit == "player" and i == 1 and hiddenLeft
+                or entry.unit == "target" and i == row.capacity and math.max(0, width - visibleWidth) or 0
+            slot:SetSize(segment + underlap, math.max(1, reserve / lanes))
+            slot:SetShown(row.primaryShown ~= false)
+        end
+        if row.aux then
+            local offset = row.primaryShown and reserve / lanes or 0
+            row.aux:ClearAllPoints(); row.aux:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -offset)
+            row.aux:SetSize(width, math.max(1, reserve / lanes))
+            row.aux:SetShown(row.auxShown == true)
+        end
+    end
+    GUF.LayoutArtisticBarDividers(entry)
+    if entry.predictions then entry.predictions.dirty = true end
+    entry.layoutWriting, GUF.geometryWriting = writing, geometryWriting
+    if entry.predictions then GUF.UpdatePredictionBars(entry) end
+end
+

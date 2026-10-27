@@ -38,7 +38,7 @@ local function makeGroup(entry, key, cfg, region, width, height, boss)
     local parent = GUF.AuraParent(entry, cfg)
     local x, y = GUF.AuraPosition(entry, cfg)
     local ratio = ratioFor(entry, region)
-    if not ratio then GUF.pending = true; return end
+    if not ratio then GUF.DeferRuntime("native-readiness"); return end
     if boss then
         point, relative, parent = "CENTER", cfg.anchorPoint, entry.frame
         x, y = cfg.x / ratio, cfg.y / ratio
@@ -139,7 +139,7 @@ local function apply(entry, groups, force)
     for _, group in ipairs(groups) do
         local region = group.region
         local protected = region:IsProtected()
-        if not entry.configurationPreview and GUF.Restricted() and (GUF.Secret(protected) or protected) then GUF.pending = true
+        if not entry.configurationPreview and GUF.Restricted() and (GUF.Secret(protected) or protected) then GUF.DeferRuntime("native-readiness")
         else
             local y = group.y + shifts[group.side] / group.ratio
             local saved = region.goodUnitFramesCastAnchor
@@ -158,7 +158,7 @@ local function apply(entry, groups, force)
 end
 
 function GUF.ApplyLiveCastAuraLayout(entry)
-    local auras, groups = GUF.db.frames[entry.unit].auras, {}
+    local auras, groups = GUF.Runtime.Settings("auras", entry).frames[entry.unit].auras, {}
     for i = 1, GUF.auraFrameCount do
         local parentKind, childKind = pair(auras, i)
         for _, kind in ipairs({ "buffs", "debuffs" }) do

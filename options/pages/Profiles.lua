@@ -18,9 +18,10 @@ function UI.ConfirmProfileAction(message, action)
         confirmation.message:SetPoint("TOPLEFT", 28, -28); confirmation.message:SetPoint("BOTTOMRIGHT", -28, 72)
         confirmation.message:SetJustifyV("MIDDLE"); UI.Ink(confirmation.message)
         local accept = UI.Button(dialog, "Confirm", 145, function()
-            local callback, profile = confirmation.action, confirmation.profile
+            local callback, lease = confirmation.action, confirmation.lease
+            local current = UI.IsCurrent(lease)
             confirmation:Hide()
-            if GUF.db ~= profile then GUF.Print("The current profile changed. Choose the action again."); return end
+            if not current then return end
             if GUF.Restricted() or GUF.editing then GUF.Print("Finish combat or Edit Mode before applying this action."); return end
             if callback then callback() end
         end)
@@ -30,7 +31,7 @@ function UI.ConfirmProfileAction(message, action)
         confirmation:SetScript("OnHide", function() confirmation.action = nil end)
         tinsert(UISpecialFrames, "GoodUnitFramesConfirmation")
     end
-    confirmation.message:SetText(message); confirmation.action, confirmation.profile = action, GUF.db
+    confirmation.message:SetText(message); confirmation.action, confirmation.lease = action, UI.PageLease(GUF.options, GUF.options.content)
     confirmation:Show()
 end
 local function caption(parent, text, x, y, size)
@@ -77,9 +78,7 @@ UI.RegisterPage("profiles", "Profiles", function(builder)
     end
     create.name:SetText(GUF.profileDraft.name)
     local function commitName(self) GUF.profileDraft.name = self:GetText() end
-    create.name:SetScript("OnEnterPressed", function(self) commitName(self); self:ClearFocus() end)
-    create.name:SetScript("OnEditFocusLost", commitName)
-    create.name:SetScript("OnEscapePressed", function(self) self:SetText(GUF.profileDraft.name); self:ClearFocus() end)
+    builder.BindEdit(create.name, commitName, function(self) self:SetText(GUF.profileDraft.name) end)
     create.defaults:SetChecked(GUF.profileDraft.useDefaults)
     create.defaults:SetScript("OnClick", function(self) GUF.profileDraft.useDefaults = self:GetChecked() and true or false end)
     create.action:SetScript("OnClick", function()

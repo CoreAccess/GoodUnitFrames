@@ -23,7 +23,7 @@ function GUF.ClassPortraitDesign(class, id)
 end
 
 function GUF.PortraitDesignForClass(class)
-    local player = GUF.db.frames.player
+    local player = GUF.Runtime.Settings("layout", "player").frames.player
     local selections = player.design.portraits
     return class and GUF.ClassPortraitDesign(class, selections and selections[class])
 end
@@ -33,7 +33,8 @@ local creatureRanks = { normal = "normal", trivial = "normal", minus = "normal",
 
 GUF.monsterTypes = { { "humanoid", "Humanoid" }, { "beast", "Beast" }, { "dragonkin", "Dragonkin" },
     { "undead", "Undead" }, { "elemental", "Elemental" }, { "demon", "Demon" },
-    { "mechanical", "Mechanical" }, { "giant", "Giant" }, { "aberration", "Aberration" }, { "critter", "Critter" } }
+    { "mechanical", "Mechanical" }, { "giant", "Giant" }, { "aberration", "Aberration" }, { "critter", "Critter" },
+    { "unknown", "Unknown" } }
 -- Select complete families with independent Normal/Rare/Elite/Rare Elite art.
 -- Family choices retain their normal-source IDs for saved compatibility.
 GUF.monsterPortraitDesigns = GUF.monsterPortraitDesigns or {}
@@ -55,17 +56,32 @@ function GUF.MonsterPortraitDesign(family, id)
 end
 
 function GUF.CreaturePortraitDesign(identity, classification)
-    if GUF.Secret(identity) or GUF.Secret(classification) or type(classification) ~= "string" then return end
+    if GUF.Secret(identity) then return nil, "creature-identity-restricted" end
+    if GUF.Secret(classification) then return nil, "creature-rank-restricted" end
+    if type(classification) ~= "string" then return nil, "creature-rank-unavailable" end
     local family = type(identity) == "string" and identity:match("^creature%-(%l+)$")
-    local target = GUF.db and GUF.db.frames.target
+    if not family then return nil, "creature-type-unavailable" end
+    local target = GUF.db and GUF.Runtime.Settings("layout", "target").frames.target
     local selections = target and target.design.creatures
     local choice = GUF.MonsterPortraitDesign(family, selections and selections[family])
     local rank = creatureRanks[classification]
-    return choice and rank and choice.ranks[rank]
+    if not choice then return nil, "creature-design-unavailable" end
+    if not rank then return nil, "creature-rank-unsupported" end
+    local source = choice.ranks[rank]
+    return source, source and "selected" or "creature-artwork-unavailable"
+end
+
+-- Public rank is independent of creature family. An unavailable rank uses the
+-- neutral Normal painting; never branch on, index with or retain a secret rank.
+function GUF.UnknownPortraitDesign(classification)
+    local rank = "normal"
+    if not GUF.Secret(classification) and type(classification) == "string" then rank = creatureRanks[classification] or rank end
+    local source = GUF.CreaturePortraitDesign("creature-unknown", rank)
+    return source
 end
 
 function GUF.SelectedPortraitDesign(unit, liveUnit, sampleIdentity)
-    if not GUF.LayeredDesignSettings(unit) then return end
+    if not GUF.LayeredDesignSettings(unit) then return nil, "layered-design-inactive" end
     local class
     if sampleIdentity then
         -- Synthetic preview identity is explicit; a creature sample must never
@@ -80,15 +96,22 @@ function GUF.SelectedPortraitDesign(unit, liveUnit, sampleIdentity)
     else
         liveUnit = liveUnit or (GUF.frames.target and GUF.frames.target.frame.unit) or "target"
         local exists, player = UnitExists(liveUnit), UnitIsPlayer(liveUnit)
-        if GUF.Secret(exists) or not exists or GUF.Secret(player) then return end
+        if GUF.Secret(exists) then return nil, "unit-existence-restricted" end
+        if not exists then return nil, "unit-missing" end
+        if GUF.Secret(player) then return nil, "player-type-restricted" end
         if not player then
-            if unit ~= "target" then return end
-            return GUF.CreaturePortraitDesign(GUF.ArtisticPortraitIdentity(unit, liveUnit), UnitClassification(liveUnit))
+            if unit ~= "target" then return nil, "unsupported-unit" end
+            local identity, reason = GUF.ArtisticPortraitIdentity(unit, liveUnit)
+            local classification = UnitClassification(liveUnit)
+            if not identity then return GUF.UnknownPortraitDesign(classification), reason end
+            local source, selectionReason = GUF.CreaturePortraitDesign(identity, classification)
+            return source or GUF.UnknownPortraitDesign(classification), selectionReason
         end
         local _, token = UnitClass(liveUnit)
         if not GUF.Secret(token) and type(token) == "string" then class = token end
     end
-    return GUF.PortraitDesignForClass(class)
+    local source = GUF.PortraitDesignForClass(class)
+    return source, source and "selected" or "class-design-unavailable"
 end
 
 function GUF.NormalizeDesignSettings(frames)

@@ -1,4 +1,8 @@
 local _, GUF = ...
+
+local function leaseAlpha(region, value, relative)
+    return GUF.RegionAlpha(region, value, relative, "Threat")
+end
 -- Feature module for the existing Blizzard unit frames.
 
 local function publicNumber(value)
@@ -36,66 +40,8 @@ function GUF.StyleThreatText(entry, frame, width, height, scale)
     frame.threatFont, frame.threatFontSize, frame.threatOutline = font, size, outline
 end
 
--- Prepare public meter geometry during guarded layout. Native Name is bound
--- to both edges of an owned area here; only that area changes during combat.
-function GUF.LayoutArtisticThreatName(entry)
-    local state, cfg = entry.artisticLayout, GUF.db.threat
-    state.threatGeometry, state.threatNameInset = nil, nil
-    if entry.unit ~= "target" or not state.active or not (cfg.enabled or entry.configurationShowAll) then return end
-    local scale = state.scale
-    local height = state.headerTop - state.healthY
-    local options = GUF.PresentationFrameSettings(entry).text.threat
-    local font, size = GUF.Font(options.font), options.size
-    if not state.threatMeasure then
-        state.threatMeasure = state.nameStrip:CreateFontString(nil, "OVERLAY")
-        state.threatMeasure.goodUnitFramesOwned = true
-        state.threatMeasure:SetAlpha(0)
-        state.threatMeasure:Hide()
-    end
-    local sample = "100%"
-    -- Measure only a public configuration sample, never the live percentage.
-    state.threatMeasure:SetFont(font, size, options.outline)
-    state.threatMeasure:SetText(sample)
-    local measured = state.threatMeasure:GetStringWidth()
-    local textWidth = publicNumber(measured) and measured > 0 and measured or size * .65 * #sample
-    -- Trim four scaled units from the former span, keeping the portrait end
-    -- fixed and retaining eight units of padding around the public sample.
-    local width = math.min(math.max(((cfg.artisticWidth or 52) - 4) * scale, textWidth + 8 * scale),
-        math.max(scale, state.barWidth - 32 * scale))
-    local right = state.barX + state.barWidth - 4 * scale
-    local left = right - width
-    state.threatGeometry = { left = left, top = state.headerTop, height = height,
-        width = state.px + state.barOffset - left, textWidth = width,
-        scale = scale }
-end
-
-local function fitArtisticThreat(frame, entry)
-    local state = entry.artisticLayout
-    local geometry = state.threatGeometry
-    if not geometry then return end
-    local scale = geometry.scale
-    local edge = math.min(3 * scale, geometry.height / 3)
-    -- Like Health/Power, the backing continues underneath the circular face.
-    -- Keep the entire meter behind the portrait and its painted surround.
-    frame:SetFrameLevel(state.nameStrip:GetFrameLevel() + 1)
-    frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", entry.frame, "TOPLEFT", geometry.left, geometry.top)
-    frame:SetSize(geometry.width, geometry.height)
-    frame.background:ClearAllPoints()
-    -- Preserve the Name row's existing top chrome, not a separate plaque rim.
-    frame.background:SetPoint("TOPLEFT", frame, "TOPLEFT", edge, -edge)
-    frame.background:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT")
-    -- Reuse the Target stack's left rail, stopping below the Name top chrome.
-    frame.leftBorder:ClearAllPoints()
-    frame.leftBorder:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -edge)
-    frame.leftBorder:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT")
-    frame.leftBorder:SetWidth(edge)
-    GUF.PaintBlizzardStackSlice(frame.leftBorder, "target", 2, 1)
-    GUF.StyleThreatText(entry, frame, geometry.textWidth, geometry.height, scale)
-end
-
 function GUF.CreateArtisticThreatPlaque(parent)
-    local frame = CreateFrame("Frame", nil, parent)
+    local frame = GUF.Runtime.CreateFrame("Frame", nil, parent)
     frame.goodUnitFramesOwned = true
     frame:EnableMouse(false)
     frame.background = frame:CreateTexture(nil, "BACKGROUND")
@@ -114,20 +60,7 @@ function GUF.CreateArtisticThreatPlaque(parent)
 end
 
 local function threatVisible(frame, entry, show)
-    local state = entry.artisticLayout
-    if entry.unit == "target" and state and state.active then
-        local geometry, scale = state.threatGeometry, state.scale
-        local inset = show and geometry and geometry.textWidth + 4 * scale or 0
-        if state.threatNameInset ~= inset then
-            -- Native Name follows these owned anchors without any native text
-            -- SetPoint/SetWidth writes, including combat retarget/zero threat.
-            state.nameArea:SetPoint("BOTTOMRIGHT", state.nameStrip, "BOTTOMRIGHT",
-                state.barX + state.barWidth - 4 * scale - state.px - state.barOffset - inset, 0)
-            state.nameTextWidth = math.max(1, state.barWidth - 16 * scale - inset)
-            state.threatNameInset = inset
-        end
-    end
-    frame:SetShown(show)
+    if not GUF.Presentation.Feature(entry, "threatVisibility", frame, show) then frame:SetShown(show) end
 end
 
 local function getNativeThreat(entry)
@@ -159,78 +92,63 @@ local function applyBorder(frame, native)
 end
 
 local function positionThreat(frame, entry, cfg)
-    if frame == GUF.artisticThreat or entry.configurationPreview then
-        fitArtisticThreat(frame, entry)
-        return
+    if GUF.Presentation.Role(entry, "threatHost") then
+        return GUF.Presentation.Feature(entry, "positionThreat", frame)
     end
-    -- Anchor directly so vertical placement follows Blizzard's layout even if
-    -- its screen coordinates have not been calculated yet.
+    -- Keep the vertical binding on Blizzard's name area. Horizontal alignment
+    -- uses native coordinates only while all geometry inputs are public.
     local topRegion = entry.nameBackground
-        or (not GUF.db.frames.target.hide.name and entry.name) or entry.health
-    local x = cfg.x
+        or (not GUF.Runtime.Settings("threat", "target").frames.target.hide.name and entry.name) or entry.health
     local barCenter = entry.health:GetCenter()
     local regionCenter = topRegion:GetCenter()
-    if barCenter and regionCenter then
-        x = x + (barCenter * entry.health:GetEffectiveScale()
-            - regionCenter * topRegion:GetParent():GetEffectiveScale()) / frame:GetEffectiveScale()
-    end
+    local barScale = entry.health:GetEffectiveScale()
+    local regionScale = topRegion:GetParent():GetEffectiveScale()
+    local frameScale = frame:GetEffectiveScale()
+    -- Native geometry can be opaque outside combat too. Truthiness does not
+    -- make a coordinate public; defer the panel until every input is usable.
+    if not publicNumber(barCenter) or not publicNumber(regionCenter)
+        or not publicNumber(barScale) or not publicNumber(regionScale) or not publicNumber(frameScale)
+        or barScale <= 0 or regionScale <= 0 or frameScale <= 0 then return false end
+    local x = cfg.x + (barCenter * barScale - regionCenter * regionScale) / frameScale
     if frame.anchorRegion ~= topRegion or frame.anchorX ~= x or frame.anchorY ~= cfg.y then
         frame:ClearAllPoints()
         frame:SetPoint("BOTTOM", topRegion, "TOP", x, cfg.y)
         frame.anchorRegion, frame.anchorX, frame.anchorY = topRegion, x, cfg.y
     end
+    return true
 end
 
 function GUF.RenderConfigurationThreat(entry, previewShown)
-    if entry.unit ~= "target" then return end
-    local state, cfg = entry.artisticLayout, GUF.db.threat
-    local frame = state.threatPreview
-    if not frame then
-        frame = GUF.CreateArtisticThreatPlaque(entry.frame)
-        state.threatPreview = frame
-        local handle = CreateFrame("Frame", nil, frame)
-        handle.goodUnitFramesOwned = true
-        handle:SetAllPoints(frame)
-        frame.dragHandle = handle
-        -- This section is fixed to the Name row; the legacy drag offset is dormant.
-        handle:EnableMouse(false)
-        handle:SetScript("OnHide", function(self)
-            self:SetScript("OnUpdate", nil)
-            self.drag = nil
-        end)
-    end
-    positionThreat(frame, entry, cfg)
-    frame.dragHandle:SetFrameLevel(frame:GetFrameLevel() + 2)
-    frame.text:SetText("100%")
-    frame.background:SetVertexColor(.78, .10, .10, cfg.alpha)
-    local show = entry.optionsPreview and ((cfg.enabled and entry.previewCombat) or entry.configurationShowAll) or not entry.optionsPreview and (cfg.enabled or GUF.configurationShowAll)
-    if entry.optionsPreview and previewShown ~= nil then show = cfg.enabled and previewShown end
-    threatVisible(frame, entry, show and state.threatGeometry ~= nil)
+    return GUF.Presentation.Feature(entry, "renderThreatSample", previewShown)
 end
 
 function GUF.ApplyThreat()
     local entry = GUF.frames.target
     if not entry or not entry.health then return end
-    if not GUF.threat then
-        local frame = CreateFrame("Frame", "GoodUnitFramesThreat", entry.frame, "BackdropTemplate")
+    if not GUF.threat or not GUF.threat.created then
+        local frame = GUF.threat or GUF.Runtime.CreateFrame("Frame", "GoodUnitFramesThreat", entry.frame, "BackdropTemplate")
+        GUF.threat = frame
+        frame:Hide()
         frame:SetFrameLevel(entry.frame:GetFrameLevel() + 8)
         frame:EnableMouse(false)
         frame:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8,
             insets = { left = 2, right = 2, top = 2, bottom = 2 } })
         frame:SetBackdropBorderColor(.70, .70, .70, 1)
-        frame.background = frame:CreateTexture(nil, "BACKGROUND")
+        frame.background = frame.background or frame:CreateTexture(nil, "BACKGROUND")
         -- Clear the angled top corners and fill down to the bottom border.
         frame.background:SetPoint("TOPLEFT", 4, -4)
         frame.background:SetPoint("BOTTOMRIGHT", -4, 1)
-        frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        frame.text = frame.text or frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         frame.text:SetPoint("CENTER")
         GUF.threat = frame
-        entry.frame:HookScript("OnShow", function()
-            if GUF.Restricted() then GUF.pending = true else GUF.ApplyThreat() end
+        GUF.NativeProperties.HookScript("Threat:script:1", entry.frame, "OnShow", function()
+            if GUF.Restricted() then GUF.DeferRuntime("native-readiness") else GUF.ApplyThreat() end
         end)
+        frame.created = true
+        GUF.Runtime.Constructed()
     end
-    local cfg = GUF.db.threat
-    local artistic = entry.artisticLayout and entry.artisticLayout.active
+    local cfg = GUF.Runtime.Settings("threat").threat
+    local artistic = GUF.Presentation.Role(entry, "threatHost") ~= nil
     if artistic and not GUF.artisticThreat then
         GUF.artisticThreat = GUF.CreateArtisticThreatPlaque(entry.frame)
     end
@@ -238,7 +156,7 @@ function GUF.ApplyThreat()
     applyBorder(GUF.threat, native)
     if native and not (native.IsForbidden and native:IsForbidden()) then
         -- Show one numerical threat display and restore the stock one when disabled.
-        GUF.RegionAlpha(native, (artistic or cfg.enabled) and 0 or nil)
+        leaseAlpha(native, (artistic or cfg.enabled) and 0 or nil)
     end
     local frame = artistic and GUF.artisticThreat or GUF.threat
     if artistic then
@@ -247,25 +165,29 @@ function GUF.ApplyThreat()
         frame:SetSize(cfg.width, cfg.height)
         if GUF.artisticThreat then GUF.artisticThreat:Hide() end
     end
-    positionThreat(frame, entry, cfg)
+    if not cfg.enabled then threatVisible(frame, entry, false); return end
     if not artistic then GUF.StyleThreatText(entry, frame, cfg.width, cfg.height) end
+    if not positionThreat(frame, entry, cfg) then threatVisible(frame, entry, false); return end
     GUF.UpdateThreat()
 end
 
 function GUF.UpdateThreat()
     local entry = GUF.frames.target
-    local artistic = entry and entry.artisticLayout and entry.artisticLayout.active
-    local frame, cfg = artistic and GUF.artisticThreat or GUF.threat, GUF.db and GUF.db.threat
+    local artistic = entry and GUF.Presentation.Role(entry, "threatHost") ~= nil
+    local frame, cfg = artistic and GUF.artisticThreat or GUF.threat, GUF.db and GUF.Runtime.Settings("threat").threat
     if not frame or not cfg then return end
+    if not cfg.enabled then threatVisible(frame, entry, false); return end
+    local rootShown = entry.frame:IsVisible()
+    if not GUF.Secret(rootShown) and not rootShown then threatVisible(frame, entry, false); return end
     local exists, hostile = UnitExists("target"), UnitCanAttack("player", "target")
     if not cfg.enabled or GUF.Secret(exists) or not exists
         or GUF.Secret(hostile) or not hostile or not UnitDetailedThreatSituation then
         threatVisible(frame, entry, false); return
     end
     if artistic then
-        if not entry.artisticLayout.threatGeometry then
+        if not GUF.Presentation.Role(entry, "threatGeometry") then
             -- Enabling in combat waits for the guarded Name-area binding.
-            GUF.pending = true
+            GUF.DeferRuntime("native-readiness")
             threatVisible(frame, entry, false); return
         end
         local playerCombat, targetCombat = UnitAffectingCombat("player"), UnitAffectingCombat("target")
@@ -275,7 +197,9 @@ function GUF.UpdateThreat()
     end
     -- Use the captured Name-row placement; Blizzard's separate panel still
     -- follows its native name area as that layout settles.
-    positionThreat(frame, GUF.frames.target, cfg)
+    -- The existing periodic update retries deferred placement; do not force a
+    -- full addon reapply or reuse offsets computed for another native layout.
+    if not positionThreat(frame, entry, cfg) then threatVisible(frame, entry, false); return end
     -- Always use scaled threat: 100% is the aggro threshold. Retired saved
     -- percentage/zero-display preferences must not change this policy.
     local _, status, percent = UnitDetailedThreatSituation("player", "target")

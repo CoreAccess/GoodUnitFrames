@@ -1,8 +1,8 @@
 ## Interface: 16001, 120105
 ## Title: Good Unit Frames
-## Notes: Customize Blizzard unit frames for Warcraft Forever and World of Warcraft Retail. /guf
+## Notes: Customize Blizzard unit frames for Warcraft Forever and World of Warcraft Retail.
 ## Author: Druid Whims
-## Version: 1.0.0
+## Version: 1.0.1
 ## SavedVariables: GoodUnitFramesProfiles
 ## Category: Unit Frames
 
@@ -12,12 +12,27 @@ libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
 core\Media.lua
 core\AuraSettings.lua
 core\TextContent.lua
+compat\Client.lua
+compat\UnitFrames.lua
+compat\Auras.lua
 core\Config.lua
 core\FactoryDefaults.lua
+core\LayoutRegistry.lua
+core\LayoutTransitions.lua
+core\Runtime.lua
+core\Updates.lua
+core\PresentationContext.lua
+layouts\Blizzard.lua
+layouts\Artistic.lua
 core\Profiles.lua
 core\LayoutProfiles.lua
+core\Settings.lua
+core\SettingDefinitions.lua
+modules\NativeProperties.lua
+modules\HealthColors.lua
 modules\Frames.lua
 modules\FrameScale.lua
+modules\FramePosition.lua
 modules\Geometry.lua
 modules\Artwork.lua
 media\indicators\artwork-v1.lua
@@ -33,6 +48,7 @@ media\artistic\artwork\class-specs-v41\catalog.lua
 media\artistic\artwork\warlock-specs-v39\catalog.lua
 media\artistic\artwork\retail-class-specs-v42\catalog.lua
 media\artistic\artwork\monster-target-v38\catalog.lua
+media\artistic\artwork\unknown-target-v43\catalog.lua
 modules\Designs.lua
 modules\BarDesigns.lua
 modules\LayeredDesigns.lua
@@ -43,6 +59,8 @@ modules\Presentation.lua
 modules\ArtisticPortrait.lua
 modules\ArtisticResources.lua
 modules\RetailResources.lua
+modules\ResourceData.lua
+modules\NativeResources.lua
 modules\ComboPoints.lua
 modules\CombatText.lua
 modules\Bars.lua
@@ -60,8 +78,13 @@ modules\CastAuraLayout.lua
 modules\PrivateAuras.lua
 modules\AuraPreview.lua
 modules\ConfigurationMode.lua
+modules\Specimens.lua
+layouts\ArtisticPresentation.lua
+layouts\ArtisticFeatures.lua
+layouts\BlizzardPresentation.lua
 modules\Threat.lua
 options\Controls.lua
+options\ControlLifecycle.lua
 options\Skin.lua
 options\WindowArtwork.lua
 options\PanelScale.lua
@@ -87,4 +110,5 @@ options\pages\Threat.lua
 options\pages\Indicators.lua
 options\TextBuilder.lua
 options\pages\Text.lua
+core\RuntimeBindings.lua
 core\Core.lua

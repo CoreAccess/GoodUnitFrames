@@ -42,11 +42,10 @@ UI.RegisterPage("panel", "General", function(builder, unit, window)
     introduction.label:SetFont(GUF.Font("Default"), 15, "")
     local host = builder.Row("", 254, true)
     host.label:Hide(); host.tiles = host.tiles or {}
-    local specifications = { { "blizzard", "Blizzard", "Default blizzard frames with simple modifications" },
-        { "artistic", "Artistic", "Class and Monster Specific Artwork. Flexible Bars. Highly Customizable" } }
+    local specifications = GUF.Layouts.List()
     for _, tile in ipairs(host.tiles) do tile:Hide() end
     for i, item in ipairs(specifications) do
-        local key, title, description = item[1], item[2], item[3]
+        local key, title, description = item.id, item.title, item.description
         local tile = host.tiles[i]
         if not tile then
             tile = CreateFrame("Button", nil, host, "BackdropTemplate"); host.tiles[i] = tile
@@ -63,29 +62,54 @@ UI.RegisterPage("panel", "General", function(builder, unit, window)
             tile.description:SetWordWrap(true)
             tile.description:SetPoint("TOPLEFT", 14, -184); tile.description:SetPoint("BOTTOMRIGHT", -14, 12); tile.description:SetJustifyV("TOP")
         end
-        tile.title:SetText(title); tile.description:SetText(description)
+        local pending = GUF.GetRequestedLayout() == key
+        tile.title:SetText(pending and title .. " (Pending)" or title); tile.description:SetText(description)
         local selected = GUF.db.general.frameStyle == key
         tile:SetBackdropColor(selected and 1 or .5, selected and .86 or .3, selected and .46 or .08, selected and .10 or .06)
         tile:SetBackdropBorderColor(.50, .38, .18, selected and 0 or 1)
         for _, effect in ipairs(tile.selectionEffects) do effect:SetShown(selected) end
         tile:SetEnabled(true); tile:SetAlpha(1)
-        tile:SetScript("OnClick", function() GUF.SelectLayout(key); GUF.BuildOptions() end)
+        tile:SetScript("OnClick", function()
+            local generation = window.buildGeneration
+            GUF.SelectLayout(key)
+            -- A completed handoff already rebuilt the editor. Deferred/canceled
+            -- requests still need their pending card state refreshed.
+            if window.buildGeneration == generation then GUF.BuildOptions() end
+        end)
         tile.illustrationStyle = key
         UI.Tooltip(tile, title, description); tile:Show()
     end
     local function layout()
+        if #specifications == 0 then return true end
         if not host:IsVisible() or host:GetWidth() < 210 then return end
         local width = host:GetWidth() / #specifications
+        local ready = true
         for i = 1, #specifications do
             local tile = host.tiles[i]
             -- Keep specimen positions and reserve room for larger wrapped captions.
             tile:ClearAllPoints(); tile:SetPoint("TOPLEFT", (i - 1) * width, 0); tile:SetSize(math.max(70, width - 12), 244)
-            tile.specimen = UI.LayoutIllustration(tile.artwork, tile.illustrationStyle, tile.specimen)
+            tile.specimens = tile.specimens or {}
+            for id, specimen in pairs(tile.specimens) do
+                if id ~= tile.illustrationStyle then specimen.frame:Hide() end
+            end
+            tile.specimen = UI.LayoutIllustration(tile.artwork, tile.illustrationStyle, tile.specimens[tile.illustrationStyle])
+            tile.specimens[tile.illustrationStyle] = tile.specimen
+            if not tile.specimen or tile.specimen.presentationStatus == "deferred"
+                or tile.specimen.presentationStatus == "unavailable" then ready = false end
         end
-        return true
+        return ready
     end
     host.QueueLayout = function()
-        host:SetScript("OnUpdate", function(self) if layout() then self:SetScript("OnUpdate", nil) end end)
+        host.presentationAttempts, host.presentationRetryAt = 0, nil
+        host:SetScript("OnUpdate", function(self)
+            if self.presentationRetryAt and GetTime() < self.presentationRetryAt then return end
+            if layout() then self:SetScript("OnUpdate", nil); return end
+            -- Late native metadata may settle after first open. Reuse this
+            -- layout driver briefly; reopening/resize supplies another attempt.
+            self.presentationAttempts = self.presentationAttempts + 1
+            if self.presentationAttempts >= 20 then self:SetScript("OnUpdate", nil)
+            else self.presentationRetryAt = GetTime() + .1 end
+        end)
     end
     host:SetScript("OnSizeChanged", host.QueueLayout)
     host:SetScript("OnShow", host.QueueLayout)

@@ -1,4 +1,8 @@
 local _, GUF = ...
+
+local function leaseAlpha(region, value, relative)
+    return GUF.RegionAlpha(region, value, relative, "BarText")
+end
 local unpack = unpack or table.unpack
 
 GUF.textModes = { { "blizzard", "Blizzard" }, { "current", "Current" }, { "maximum", "Maximum" },
@@ -24,7 +28,7 @@ local function format(text, mode, value, maximum, percent, abbreviate)
 end
 
 local function centeredStatusText(entry, kind, anchor, status)
-    local cfg = GUF.PresentationFrameSettings(entry)
+    local cfg = GUF.TextFrameSettings(entry)
     local options, text = cfg.text[kind], entry[kind .. "Text"]
     if entry.configurationPreview then
         GUF.StylePresentationText(text, cfg, options)
@@ -38,28 +42,27 @@ local function centeredStatusText(entry, kind, anchor, status)
 end
 
 function GUF.UpdateBarText(entry, kind)
-    local bar, cfg = entry[kind], GUF.db.frames[entry.unit]
+    local bar, cfg = entry[kind], GUF.Runtime.Settings("text", entry).frames[entry.unit]
     local owned = entry[kind .. "Text"]
     if not bar or not owned then return end
     GUF.SyncArtisticRenderedBar(entry, kind)
-    local artistic = entry.artisticLayout
-    local anchor = artistic and artistic.active and artistic.textAreas[kind] or bar
+    local anchor = GUF.Presentation.Role(entry, kind .. "Anchor") or bar
     local options = cfg.text[kind]
     if entry[kind .. "Slots"] then for _, text in pairs(entry[kind .. "Slots"]) do text:Hide() end end
     owned:Hide()
     local exists = UnitExists(entry.frame.unit or entry.unit)
     if not GUF.Secret(exists) and not exists then return end
-    if kind == "power" and entry.artisticLayout and entry.artisticLayout.active and entry.artisticLayout.noPower then return end
+    if kind == "power" and GUF.Presentation.Role(entry, "powerAbsent") then return end
     local unit = entry.frame.unit or entry.unit
     if kind == "health" then
         local status = GUF.UnitHealthStatus(unit)
         if status or entry.healthStatusText then
             entry.healthStatusText = status
             local hideNative = status or options.fieldLayout or options.split or cfg.healthText ~= "blizzard"
-            for _, text in pairs(GUF.NativeTexts(entry, kind)) do GUF.RegionAlpha(text, hideNative and 0 or nil) end
+            for _, text in pairs(GUF.NativeTexts(entry, kind)) do leaseAlpha(text, hideNative and 0 or nil) end
             -- Blizzard's separate Dead/Unconscious labels retain their native
             -- anchors. Only our centered label belongs over the custom fields.
-            for _, text in pairs(GUF.NativeHealthStatusTexts(entry)) do GUF.RegionAlpha(text, status and 0 or nil) end
+            for _, text in pairs(GUF.NativeHealthStatusTexts(entry)) do leaseAlpha(text, status and 0 or nil) end
         end
         if status then
             -- The owned text area follows the current Health host on both
@@ -109,7 +112,7 @@ function GUF.UpdateBarText(entry, kind)
     if not GUF.Secret(maximum) and (not maximum or maximum <= 0) then return end
     local full = options.hideFull and not GUF.Secret(value) and not GUF.Secret(maximum) and value == maximum
     if not options.split and cfg[kind .. "Text"] == "blizzard" then
-        for _, text in pairs(GUF.NativeTexts(entry, kind)) do GUF.RegionAlpha(text, full and 0 or nil) end
+        for _, text in pairs(GUF.NativeTexts(entry, kind)) do leaseAlpha(text, full and 0 or nil) end
         return
     end
     if full then return end
@@ -124,9 +127,11 @@ function GUF.UpdateBarText(entry, kind)
         for _, side in ipairs({ "left", "center", "right" }) do
             local text = slots[side]
             if not text then
-                text = GUF.BarTextHost(entry, kind):CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                text:SetDrawLayer("OVERLAY", 7)
+                if not entry.configurationPreview and (GUF.editing or GUF.Restricted()) then GUF.DeferRuntime("text-fields"); return end
+                text = GUF.Runtime.TrackRegion(GUF.BarTextHost(entry, kind):CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"))
+                text.goodUnitFramesOwned = true
                 slots[side] = text
+                text:SetDrawLayer("OVERLAY", 7)
             end
             GUF.StyleText(entry, text, kind, true)
             text:ClearAllPoints()
@@ -150,7 +155,7 @@ function GUF.UpdateBarText(entry, kind)
 end
 
 function GUF.RenderPreviewBarText(entry, kind, data, anchor)
-    local cfg = GUF.PresentationFrameSettings(entry)
+    local cfg = GUF.TextFrameSettings(entry)
     local options = cfg.text[kind]
     local owned = entry[kind .. "Text"]
     owned:Hide()

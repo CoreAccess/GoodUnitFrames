@@ -111,132 +111,15 @@ local function label(parent, text, x, y, small)
     return region
 end
 
-local function predictionSamples(entry, cfg, health, showAll, selected)
-    entry.predictionSamples = entry.predictionSamples or {}
-    local width, height = entry.health:GetWidth(), entry.health:GetHeight()
-    local current = width * health / 100
-    local index = 0
-    for _, key in ipairs({ "incHeal", "incAbsorb", "healAbsorb" }) do
-        index = index + 1
-        local settings = cfg.bars[key]
-        local bar = entry.predictionSamples[key]
-        if not bar then
-            local clip = CreateFrame("Frame", nil, entry.health)
-            clip.goodUnitFramesOwned = true
-            clip:SetClipsChildren(true)
-            bar = CreateFrame("StatusBar", nil, clip)
-            bar.sampleClip = clip
-            bar.goodUnitFramesOwned = true
-            entry.predictionSamples[key] = bar
-        end
-        local clip = bar.sampleClip
-        clip:SetFrameLevel(entry.health:GetFrameLevel() + index)
-        bar:SetFrameLevel(entry.health:GetFrameLevel() + index)
-        local full = key == "incAbsorb" and health >= 100
-        local overlay = key == "healAbsorb" or full
-        local length = math.min(width * .20, overlay and current or width - current)
-        clip:ClearAllPoints(); clip:SetPoint("TOPLEFT", entry.health, "TOPLEFT", overlay and current - length or current, 0)
-        clip:SetSize(math.max(1, length), height)
-        -- Keep the Health artwork's full geometry/UV span; clip only the
-        -- synthetic prediction amount, rather than stretching a short bar.
-        bar:ClearAllPoints(); bar:SetPoint("TOPLEFT", entry.health, "TOPLEFT")
-        bar:SetSize(width, height); bar:SetMinMaxValues(0, 1); bar:SetValue(1)
-        GUF.StylePredictionBar(bar, settings, entry.health)
-        local presentation, native = entry.blizzardPresentation, GUF.frames[entry.unit]
-        if presentation and native and native.health then
-            presentation.applyFillMasks("health", native.health, bar:GetStatusBarTexture(), key)
-        end
-        clip:SetShown((selected == key or showAll) and (settings.enabled or showAll) and length > 0 and (not full or settings.showAtFullHealth or showAll))
-        bar:Show()
-        bar:SetAlpha(settings.enabled and 1 or .25)
-    end
-    -- Keep the specimen's labels above all prediction fills, just like the live frame.
-    entry.textLayer = entry.textLayer or CreateFrame("Frame", nil, entry.health)
-    entry.textLayer:SetFrameLevel(entry.health:GetFrameLevel() + 5)
-    entry.healthText:SetParent(entry.textLayer)
-    for _, text in pairs(entry.healthSlots) do text:SetParent(entry.textLayer) end
-end
-
-local function additionalSamples(entry, cfg, options)
-    local state, frame = entry.artisticLayout, entry.frame
-    -- Classification is already painted into the chosen monster family/rank.
-    -- Hide any reused legacy copies; Blizzard specimens own their native art.
-    for _, dragon in ipairs(entry.dragons or {}) do dragon:Hide() end
-    if entry.dragonLayer then entry.dragonLayer:Hide() end
-    entry.indicatorSampleLayer = entry.indicatorSampleLayer or CreateFrame("Frame", nil, frame)
-    entry.indicatorSampleLayer.goodUnitFramesOwned = true
-    entry.indicatorSampleLayer:SetFrameLevel(frame:GetFrameLevel() + 55)
-    if not state.badges.level then state.badges.level = GUF.CreateArtisticBadge(entry.indicatorSampleLayer) end
-    local capabilities = UI.LayoutCapabilities(entry.unit)
-    local hasLevel = GUF.db.general.frameStyle == "artistic" and not GUF.LayeredDesignSettings(entry.unit)
-    if hasLevel and not entry.blizzardPresentation then
-        GUF.PositionArtisticBadge(entry, "level", "level", -state.portraitWidth / state.scale / 2 + 7, -state.portraitHeight / state.scale / 2 + 7, 22, nil, nil, entry.previewData.level)
-    else state.badges.level:Hide() end
-    if entry.resourceSample then entry.resourceSample:Hide() end
-    local showResource = capabilities.classResources and (GUF.ComboPointUnit() == entry.unit or not cfg.hide.resource or options.showAll)
-    if not GUF.PreviewComboPoints(entry, showResource) then
-        entry.resourceSample = entry.resourceSample or CreateFrame("Frame", nil, frame)
-        entry.resource = entry.resourceSample
-        local resource = entry.resourceSample
-        resource:SetFrameLevel(frame:GetFrameLevel() + 35)
-        resource:SetSize(96, 14); resource:ClearAllPoints()
-        resource:SetPoint("TOP", entry.power, "BOTTOM", cfg.indicators.resource.x, -5 + cfg.indicators.resource.y)
-        resource:SetScale(cfg.indicators.resource.scale); resource:SetAlpha(cfg.indicators.resource.alpha)
-        resource.pips = resource.pips or {}
-        for i = 1, 5 do
-            local pip = resource.pips[i] or resource:CreateTexture(nil, "ARTWORK")
-            resource.pips[i] = pip
-            pip:SetTexture("Interface\\PlayerFrame\\UI-PlayerFrame-ComboPoint")
-            pip:SetPoint("LEFT", (i - 1) * 18, 0); pip:SetSize(16, 16)
-            pip:SetVertexColor(i <= 3 and 1 or .3, i <= 3 and .75 or .25, .15)
-        end
-        resource:SetShown(showResource)
-    end
-    if entry.unit == "target" and not UI.LayoutCapabilities(entry.unit).artwork then
-        entry.threatPanel = entry.threatPanel or CreateFrame("Frame", nil, frame, "BackdropTemplate")
-        local panel = entry.threatPanel
-        panel:SetFrameLevel(frame:GetFrameLevel() + 35)
-        panel:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10 })
-        panel:SetBackdropColor(.7, .1, .1, GUF.db.threat.alpha); panel:SetBackdropBorderColor(.65, .5, .25)
-        panel.text = panel.text or panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        GUF.StyleThreatText(entry, panel, GUF.db.threat.width, GUF.db.threat.height)
-        panel.text:SetText("100%")
-        panel:SetSize(math.max(GUF.db.threat.width, panel.text:GetStringWidth() + 12), GUF.db.threat.height)
-        GUF.StyleThreatText(entry, panel, panel:GetWidth(), GUF.db.threat.height)
-        local nameArea = entry.blizzardPresentation and entry.blizzardPresentation.nameArea or state.nameArea
-        panel:ClearAllPoints(); panel:SetPoint("BOTTOM", nameArea, "TOP", GUF.db.threat.x, GUF.db.threat.y)
-        panel:SetShown(GUF.db.threat.enabled and options.previewThreat)
-    elseif entry.threatPanel then entry.threatPanel:Hide() end
-end
-
 local function positionPreview(window, entry)
     local frame, rail = entry.frame, window.preview
     local viewport, panel = rail.viewport, rail.section
-    if not panel:IsShown() or panel.moving or window.moving then return false end
+    if entry.presentationStatus ~= "applied" or not panel:IsShown() or panel.moving or window.moving then return false end
     -- Match the configured UIParent scale even when the options window is scaled.
-    local requested = GUF.db.frames[entry.unit].scale * UIParent:GetEffectiveScale() / viewport:GetEffectiveScale()
+    local requested = GUF.PresentationFrameSettings(entry).scale * UIParent:GetEffectiveScale() / viewport:GetEffectiveScale()
     frame:SetScale(requested)
-    -- Inspect only our public specimen regions; never use live unit geometry.
-    local frameHeight = frame:GetHeight()
-    local minimumX, maximumX, minimumY, maximumY = 0, frame:GetWidth(), -frameHeight, 0
-    local function include(region)
-        if region:IsShown() then
-            local rect = GUF.FrameRectInUnit(entry, region)
-            if rect then
-                minimumX = math.min(minimumX, rect.left)
-                maximumX = math.max(maximumX, rect.right)
-                minimumY = math.min(minimumY, rect.bottom - frameHeight)
-                maximumY = math.max(maximumY, rect.top - frameHeight)
-            end
-        end
-    end
-    local function collect(host)
-        for _, region in ipairs({ host:GetRegions() }) do if region:GetObjectType() ~= "MaskTexture" then include(region) end end
-        for _, child in ipairs({ host:GetChildren() }) do
-            if child:IsShown() then include(child); collect(child) end
-        end
-    end
-    collect(frame)
+    local bounds = GUF.Presentation.Bounds(entry)
+    local minimumX, maximumX, minimumY, maximumY = bounds.left, bounds.right, bounds.bottom, bounds.top
     local width, height = maximumX - minimumX, maximumY - minimumY
     local desiredWidth = math.max(360, math.ceil(width * requested + 48))
     local desiredHeight = math.max(180, math.ceil(height * requested + 80))
@@ -292,7 +175,7 @@ local function combatTextSelected(window, entry)
         and GUF.db.frames[entry.unit].combatText.enabled
 end
 
-local function render(window)
+local function renderPreview(window)
     local rail, unit = window.preview, window.unit
     if window.page ~= "units" or not window:IsShown() or not rail.section:IsShown() then return end
     if rail.section.moving or window.moving then rail.dirty = true; return end
@@ -301,7 +184,7 @@ local function render(window)
     for key, entry in pairs(specimens) do if key ~= specimenKey then entry.frame:Hide() end end
     local entry = specimens[specimenKey]
     if not entry then
-        entry = GUF.CreateFrameSpecimen(unit, rail.viewport, true)
+        entry = GUF.CreateFrameSpecimen(unit, rail.viewport, style)
         entry.optionsPreview, entry.previewStarted = true, GetTime()
         specimens[specimenKey] = entry
     end
@@ -316,7 +199,8 @@ local function render(window)
         or subject == "rareelite" and "rareelite" or subject == "rare" and "rare" or "normal"
     entry.previewIdentity = subject ~= "player" and "creature-" .. monsterType .. ":" .. creatureRank
         or portraitClass and "class-" .. portraitClass:lower() or "class-hunter"
-    local options = { state = primaryState(window, checked.states),
+    local options = { style = style, settings = GUF.Settings.GetLayout(GUF.db, style),
+        state = primaryState(window, checked.states),
         group = representative(checked.groups, window.sampleGroup, groupChoices, "solo"),
         states = checked.states, groups = checked.groups,
         showAll = false, subject = subject, health = window.sampleHealth or 55 }
@@ -324,56 +208,17 @@ local function render(window)
     options.previewThreat = unit == "target" and subject ~= "player"
     local _, powerToken = UnitPowerType("player")
     options.powerToken = not GUF.Secret(powerToken) and powerToken or "MANA"
-    if style == "blizzard" and subject ~= "player" then
-        options.powerToken = unit == "pet" and not GUF.Secret(playerClass) and playerClass == "HUNTER" and "FOCUS" or "MANA"
-    end
-    local cfg = GUF.db.frames[unit]
+    options.prediction = window.tab == "bars" and window.barCategory or nil
+    options.combatText = combatTextSelected(window, entry)
+    local cfg = options.settings.frames[unit]
     entry.frame:SetScale(cfg.scale * UIParent:GetEffectiveScale() / rail.viewport:GetEffectiveScale())
-    GUF.RenderFrameSpecimen(entry, nil, options)
-    if style == "blizzard" then UI.RenderBlizzardSpecimen(entry, options) end
-    local health = entry.previewData.healthPercent
-    local r, g, b
-    if options.state == "offline" then r, g, b = .5, .5, .5
-    elseif cfg.healthColor == "static" then r, g, b = unpack(cfg.customHealth)
-    elseif cfg.healthColor == "percent" then r, g, b = math.min(1, 2 * (1 - health / 100)), math.min(1, 2 * health / 100), 0
-    elseif subject ~= "player" and cfg.healthColor == "class" then r, g, b = GUF.PreviewHealthColor(entry, subject, health)
-    elseif subject ~= "player" then r, g, b = 0, 1, 0
-    else r, g, b = GUF.ClassColor("player") end
-    if style == "blizzard" and cfg.healthColor == "blizzard" then
-        if options.state == "offline" then
-            entry.health:GetStatusBarTexture():SetDesaturated(true)
-            GUF.TintPresentationBar(entry.health, .5, .5, .5)
-        end
-    else
-        if style == "blizzard" then entry.health:GetStatusBarTexture():SetDesaturated(true) end
-        GUF.TintPresentationBar(entry.health, r, g, b)
+    if GUF.RenderFrameSpecimen(entry, nil, options) ~= "applied" then
+        rail.positionPending = nil
+        rail.presentationAttempts = (rail.presentationAttempts or 0) + 1
+        if rail.presentationAttempts < 20 then rail.presentationRetryAt = GetTime() + .1 end
+        return
     end
-    if cfg.bars.powerMode == "class" then r, g, b = GUF.ClassColor("player")
-    else
-        local color = GUF.powerColors[options.powerToken] or GUF.powerColors.MANA
-        r, g, b = unpack(color or GUF.powerColors.MANA)
-    end
-    if options.state == "offline" or entry.previewData.status == "Dead" or entry.previewData.status == "Ghost" then
-        r, g, b = unpack(GUF.colors.offline)
-    end
-    if style == "blizzard" then entry.power:GetStatusBarTexture():SetDesaturated(true) end
-    GUF.TintPresentationBar(entry.power, r, g, b)
-    entry.name:SetTextColor(GUF.PreviewNameColor(entry, subject))
-    predictionSamples(entry, cfg, health, options.showAll, window.tab == "bars" and window.barCategory or nil)
-    additionalSamples(entry, cfg, options)
-    -- Both renderers refresh reused icons first, so returning to Player restores
-    -- their normal sample/settings visibility without changing saved options.
-    if unit == "target" and subject ~= "player" then
-        local presentation = entry.blizzardPresentation
-        for _, kind in ipairs({ "pvp", "pvpBackground", "leader", "role", "loot" }) do
-            local badge = entry.artisticLayout.badges[kind]
-            if badge then badge:Hide() end
-            local record = presentation and presentation.indicators and presentation.indicators[kind]
-            if record then record.frame:Hide() end
-        end
-    end
-    GUF.PreviewCombatText(entry, combatTextSelected(window, entry))
-    GUF.RefreshAuraPreview(entry)
+    rail.presentationAttempts, rail.presentationRetryAt = nil, nil
     rail.BindWindowDrag(entry.frame)
     refreshConditions(window)
     rail.positionPending = entry
@@ -381,9 +226,16 @@ local function render(window)
     if not positionPreview(window, entry) then entry.frame:Hide() end
 end
 
+local function render(window)
+    return GUF.Runtime.Sample(renderPreview, window)
+end
+
 function GUF.UpdateOptionsPreview()
     local window = GUF.options
-    if window and window.preview then window.preview.dirty = true end
+    if window and window.preview then
+        window.preview.dirty = true
+        window.preview.presentationAttempts, window.preview.presentationRetryAt = nil, nil
+    end
 end
 
 local function enablePreviewCondition(unit, section, scalar, key)
@@ -411,7 +263,8 @@ end
 
 function GUF.UpdateOptionsPreviewBounds(entry)
     local window = GUF.options
-    if entry and window and window.preview and window.page == "units" and entry == GUF.optionsPreviewEntry then
+    if entry and entry.presentationStatus == "applied" and window and window.preview
+        and window.page == "units" and entry == GUF.optionsPreviewEntry then
         window.preview.positionPending = entry
     end
 end
@@ -569,6 +422,9 @@ function UI.CreateOptionsPreview(window)
             -- follow-up without being discarded after this pass.
             if not positionPreview(window, entry) then rail.positionPending = entry end
         end
+        if rail.presentationRetryAt and GetTime() >= rail.presentationRetryAt then
+            rail.presentationRetryAt, rail.dirty = nil, true
+        end
         if rail.dirty then rail.dirty = nil; render(window) end
         local entry = GUF.optionsPreviewEntry
         if entry then
@@ -579,7 +435,7 @@ function UI.CreateOptionsPreview(window)
             if shown ~= running then GUF.PreviewCombatText(entry, shown) end
         end
         elapsed = elapsed + delta
-        if window.page ~= "units" then return end
+        if window.page ~= "units" or not rail.section:IsShown() then return end
         if elapsed >= .1 then elapsed = 0; if GUF.optionsPreviewEntry then GUF.TickSpecimenAuras(GUF.optionsPreviewEntry) end end
     end)
     rail.viewport:SetScript("OnSizeChanged", function() GUF.UpdateOptionsPreviewBounds(GUF.optionsPreviewEntry) end)

@@ -85,8 +85,8 @@ local function restoreRoleMedia(state)
 end
 
 local function refreshRoleMedia(state)
-    if not state.active or GUF.db.general.frameStyle ~= "blizzard" then return end
-    if GUF.editing or GUF.Restricted() then GUF.pending = true; return end
+    if not state.active or GUF.Runtime.Settings("artwork", state.entry).general.frameStyle ~= "blizzard" then return end
+    if GUF.editing or GUF.Restricted() then GUF.DeferRuntime("native-readiness"); return end
     local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
     state.writing = true
     local applied = GUF.ApplyRoleIndicatorArtwork(state.icon, role)
@@ -104,40 +104,44 @@ function GUF.ReleaseBlizzardRoleArtwork(entry)
 end
 
 function GUF.ApplyBlizzardRoleArtwork(entry, region)
-    if GUF.editing or GUF.Restricted() then GUF.pending = true; return end
+    if GUF.editing or GUF.Restricted() then GUF.DeferRuntime("native-readiness"); return end
     local icon = region.GetTexture and region or region.Icon or region.Texture
     if not icon or not icon.GetTexture then return end
     local current = entry.blizzardRoleArtwork
     if current and current.icon ~= icon then GUF.ReleaseBlizzardRoleArtwork(entry); current = nil end
     if not current then
         local media = nativeRoleMedia(icon)
-        if not media then GUF.pending = true; return end
+        if not media then GUF.DeferRuntime("native-readiness"); return end
         entry.roleArtworkStates = entry.roleArtworkStates or {}
         current = entry.roleArtworkStates[icon]
         if not current then
-            current = { icon = icon }
+            current = { icon = icon, entry = entry }
             entry.roleArtworkStates[icon] = current
+        end
+        if not current.hooked then
             local state = current
             for _, method in ipairs({ "SetAtlas", "SetTexture", "SetTexCoord" }) do
-                hooksecurefunc(icon, method, function(_, ...)
+                GUF.NativeProperties.Hook("IndicatorArtwork:1", icon, method, function(_, ...)
                     if state.writing or not state.active then return end
                     -- Capture each native write before reapplying custom media.
                     -- A UV-only update must not capture our custom file as native.
                     if method == "SetTexCoord" then
                         local coords = { ... }
-                        for _, value in ipairs(coords) do if GUF.Secret(value) then GUF.pending = true; return end end
+                        for _, value in ipairs(coords) do if GUF.Secret(value) then GUF.DeferRuntime("native-readiness"); return end end
                         state.native.coords = coords
                     else
                         local media = nativeRoleMedia(icon)
-                        if not media then GUF.pending = true; return end
+                        if not media then GUF.DeferRuntime("native-readiness"); return end
                         if method == "SetTexture" then media.coords = state.native.coords end
                         state.native = media
                     end
                     refreshRoleMedia(state)
                 end)
             end
+            current.hooked = true
         end
         current.native, current.active = media, true
+        GUF.NativeProperties.Track(icon, "roleMedia", entry, current)
         entry.blizzardRoleArtwork = current
     end
     refreshRoleMedia(current)

@@ -16,7 +16,7 @@ function UI.UnitContext(window)
         if keys[1] == "design" and keys[2] == "portraits" then return path(GUF.db.frames.player, keys) end
         return path(keys[1] == "threat" and GUF.db or GUF.db.frames[unit], keys)
     end
-    -- Capture the unit so edits losing focus during navigation affect their original frame.
+    -- The builder lease cancels edits when this profile/layout/page is retired.
     return cfg, {
         Read = function(keys)
             if keys[1] == "design" and keys[2] == "layered" and keys[3] == "angles" then
@@ -150,27 +150,8 @@ end
 
 local function copySettings(source, destination)
     if not canCopyFrom(source, destination) then return end
-    local previous = GUF.db.frames[destination]
-    local copied = GUF.Copy(GUF.db.frames[source])
-    copied.nameDisplay = previous.nameDisplay
-    copied.design = GUF.Copy(previous.design)
-    -- Threat text belongs to Target; copying another unit must retain it.
-    copied.text.threat = destination == "target" and GUF.Copy(previous.text.threat) or nil
-    copied.text.rank = destination == "target" and GUF.Copy(previous.text.rank) or nil
-    if destination == "player" and copied.nameColor == "reaction" then copied.nameColor = "class" end
-    copied.auras.bossDebuffs = GUF.Copy(previous.auras.bossDebuffs)
-    -- Stock target auras have a unit-specific replacement setting.
-    if destination == "target" then copied.auras.replaceDefault = previous.auras.replaceDefault
-    else copied.auras.replaceDefault = nil end
-    for _, kind in ipairs({ "resource", "role" }) do
-        -- Keep unit-specific settings; combo rows now expose resources on both
-        -- frames, but copying must not repurpose Player's Warlock preferences.
-        copied.hide[kind] = previous.hide[kind]
-        copied.indicators[kind] = GUF.Copy(previous.indicators[kind])
-    end
-    GUF.db.frames[destination] = copied
-    if GUF.CanAnchor(destination, copied.position.anchorTo) == false then copied.position.anchorTo = "UIParent" end
-    GUF.RequestApply()
+    if not GUF.Settings.CopyUnit(GUF.db, source, destination) then return end
+    GUF.RequestApply(nil, nil, "unit-copy")
     GUF.BuildOptions()
 end
 

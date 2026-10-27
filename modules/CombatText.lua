@@ -1,4 +1,8 @@
 local _, GUF = ...
+
+local function leaseAlpha(region, value, relative)
+    return GUF.RegionAlpha(region, value, relative, "CombatText")
+end
 local fadeIn, hold, fadeOut = .15, 1.15, .7
 local duration = fadeIn + hold + fadeOut
 local feedbackLevel = 55
@@ -22,6 +26,9 @@ local function clearFeedback(frame)
 end
 
 local function updateFeedback(frame, elapsed)
+    if frame.runtimeEntry and not GUF.Runtime.IsBinding(frame.runtimeBinding, "combatText", frame.runtimeEntry) then
+        clearFeedback(frame); return
+    end
     -- The formatter owns the opaque combat message. This owned renderer owns
     -- its lifetime, alpha and motion using public elapsed time only.
     frame.feedbackElapsed = frame.feedbackElapsed + elapsed
@@ -34,8 +41,19 @@ local function updateFeedback(frame, elapsed)
     frame.feedbackText:SetPoint("CENTER", frame, "CENTER", 0, frame.feedbackRise * progress)
 end
 
+local function feedbackEvent(entry, self, action, ...)
+    local cfg = GUF.Runtime.Settings("combatText", entry).frames[entry.unit]
+    if not cfg.combatText.enabled or not self:IsVisible() then return end
+    -- Opaque combat values go directly to Blizzard's supported text renderer.
+    CombatFeedback_OnCombatEvent(self, action, ...)
+    self.feedbackElapsed = 0
+    self.feedbackText:SetAlpha(0)
+    self.feedbackText:SetPoint("CENTER", self, "CENTER", 0, 0)
+    self:SetScript("OnUpdate", updateFeedback)
+end
+
 local function createFeedback(entry)
-    local frame = CreateFrame("Frame", nil, entry.frame)
+    local frame = GUF.Runtime.CreateFrame("Frame", nil, entry.frame)
     frame.goodUnitFramesOwned = true
     frame:SetSize(1, 1)
     frame:SetFrameLevel(entry.frame:GetFrameLevel() + feedbackLevel)
@@ -46,20 +64,16 @@ local function createFeedback(entry)
     frame:SetScript("OnHide", clearFeedback)
     frame:SetScript("OnEvent", function(self, event, _, action, ...)
         if event ~= "UNIT_COMBAT" then clearFeedback(self); return end
-        local cfg = GUF.db.frames[entry.unit]
-        if not cfg.combatText.enabled or not self:IsVisible() then return end
-        -- Let Blizzard format damage, healing, and avoidance, without inspecting event amounts.
-        CombatFeedback_OnCombatEvent(self, action, ...)
-        self.feedbackElapsed = 0
-        self.feedbackText:SetAlpha(0)
-        self.feedbackText:SetPoint("CENTER", self, "CENTER", 0, 0)
-        self:SetScript("OnUpdate", updateFeedback)
+        if not GUF.Runtime.IsBinding(self.runtimeBinding, "combatText", entry) then return end
+        GUF.Runtime.Refresh(entry, "combatText", feedbackEvent, entry, self, action, ...)
     end)
+    frame.created = true
+    GUF.Runtime.Constructed()
     return frame
 end
 
 local function styleFeedback(entry, frame)
-    local cfg = GUF.db.frames[entry.unit]
+    local cfg = GUF.Runtime.Settings("combatText", entry).frames[entry.unit]
     local settings, style = cfg.combatText, cfg.indicators.feedback
     -- Reapplying geometry/style must not discard an in-flight message.
     -- Float above the unit's aura/cooldown hosts and resting artwork.
@@ -100,7 +114,7 @@ function GUF.PreviewCombatText(entry, shown)
     -- Interactive specimens only: never register events or touch native feedback.
     if not entry.optionsPreview then return end
     local frame = entry.combatText
-    if not shown or not GUF.db.frames[entry.unit].combatText.enabled then
+    if not shown or not GUF.Runtime.Settings("combatText", entry).frames[entry.unit].combatText.enabled then
         if frame then frame:Hide(); clearFeedback(frame) end
         return
     end
@@ -109,7 +123,7 @@ function GUF.PreviewCombatText(entry, shown)
     -- Reserve the whole public animation path, keeping preview bounds stable
     -- while offsets, font and scale are adjusted at any point in the cycle.
     if not frame.previewBounds then
-        frame.previewBounds = CreateFrame("Frame", nil, frame)
+        frame.previewBounds = GUF.Runtime.CreateFrame("Frame", nil, frame)
         frame.previewBounds.goodUnitFramesOwned = true
     end
     frame.previewBounds:ClearAllPoints()
@@ -125,14 +139,15 @@ end
 
 function GUF.ApplyCombatText(entry)
     if entry.optionsPreview or not CombatFeedback_OnCombatEvent then return end
-    local cfg = GUF.db.frames[entry.unit]
+    local cfg = GUF.Runtime.Settings("combatText", entry).frames[entry.unit]
     -- The single enable toggle owns feedback visibility. Native controllers
     -- continue running while their duplicate text is cosmetically suppressed.
-    for _, region in pairs(entry.feedbackRegions) do GUF.RegionAlpha(region, 0) end
+    for _, region in pairs(entry.feedbackRegions) do leaseAlpha(region, 0) end
     local enabled = cfg.combatText.enabled
     local frame = entry.combatText
-    if not frame and enabled then frame = createFeedback(entry); entry.combatText = frame end
+    if enabled and (not frame or not frame.created) then frame = createFeedback(entry); entry.combatText = frame end
     if not frame then return end
+    frame.runtimeEntry, frame.runtimeBinding = entry, GUF.Runtime.Binding("combatText", entry)
     frame:UnregisterAllEvents()
     if not enabled then frame:Hide(); clearFeedback(frame); return end
     styleFeedback(entry, frame)

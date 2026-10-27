@@ -245,7 +245,7 @@ function GUF.ExtendSampleTextData(data)
 end
 
 function GUF.StyleBarField(entry, text, kind, field)
-    local cfg = GUF.PresentationFrameSettings(entry)
+    local cfg = GUF.TextFrameSettings(entry)
     local options = cfg.text[kind]
     local size = field.size > 0 and field.size or options.custom and options.size or cfg.fontSize
     size = math.max(6, size)
@@ -273,17 +273,17 @@ function GUF.PrepareBarFields(entry, kind)
     local host = GUF.BarTextHost(entry, kind)
     for _, side in ipairs({ "left", "center", "right" }) do
         if not slots[side] then
-            if not entry.configurationPreview and (GUF.editing or GUF.Restricted()) then GUF.pending = true; return end
-            local text = host:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            if not entry.configurationPreview and (GUF.editing or GUF.Restricted()) then GUF.DeferRuntime("text-fields"); return end
+            local text = GUF.Runtime.TrackRegion(host:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"))
+            slots[side] = text
             text.goodUnitFramesOwned = true
             text:SetDrawLayer("OVERLAY", 7)
             text:Hide()
-            slots[side] = text
         end
         -- Fields can predate predictions or the current layout. Adopt the
         -- visible text host on every apply, not only at first creation.
         if slots[side]:GetParent() ~= host then
-            if not entry.configurationPreview and (GUF.editing or GUF.Restricted()) then GUF.pending = true; return end
+            if not entry.configurationPreview and (GUF.editing or GUF.Restricted()) then GUF.DeferRuntime("text-fields"); return end
             slots[side]:SetParent(host)
         end
     end
@@ -301,17 +301,12 @@ local function publicFieldWidth(text)
 end
 
 function GUF.RenderBarFields(entry, kind, data, anchor)
-    local options = GUF.PresentationFrameSettings(entry).text[kind]
+    local options = GUF.TextFrameSettings(entry).text[kind]
     local slots = GUF.PrepareBarFields(entry, kind)
     if not slots then return end
     local width, height = anchor:GetWidth(), anchor:GetHeight()
-    local state = entry.artisticLayout
-    if state and state.active then
-        width = state.barWidth - 8 * state.scale
-        if kind == "health" then
-            height = state.noPower and state.healthRowHeight + state.powerRowHeight - state.healthTopInset - 2 * state.scale or state.healthFillHeight
-        else height = state.powerRowHeight - 3 * state.scale end
-    end
+    local metrics = GUF.Presentation.Role(entry, "barMetrics")
+    if metrics then width, height = metrics.width, metrics[kind] end
     local publicWidth = not GUF.Secret(width) and type(width) == "number" and width > 0
     local publicHeight = not GUF.Secret(height) and type(height) == "number" and height > 0
     if not publicHeight then height = 0 end

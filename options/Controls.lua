@@ -81,6 +81,8 @@ end
 function UI.Dropdown(parent, values, getValue, setValue, existing)
     local control = existing or CreateFrame("DropdownButton", nil, parent, "WowStyle1DropdownTemplate")
     UI.SkinDropdown(control)
+    local binding = {}
+    control.goodUnitFramesDropdownBinding = binding
     control:Show()
     control:SetSize(controlWidth, 24)
     local function refresh()
@@ -97,12 +99,18 @@ function UI.Dropdown(parent, values, getValue, setValue, existing)
         control:Update()
     end
     control:SetupMenu(function(_, root)
+        local window = GUF.options
+        local lease = window and UI.PageLease(window, UI.ParentLease(parent) and window.content)
+        local function current()
+            return control.goodUnitFramesDropdownBinding == binding and control:IsShown()
+                and (not lease or UI.IsCurrent(lease))
+        end
         for _, entry in ipairs(choices(type(values) == "function" and values() or values)) do
             local value, label = entry[1], entry[2]
-            local option = root:CreateRadio(label, function() return getValue() == value end, function()
-                if entry.disabled then return end
+            local option = root:CreateRadio(label, function() return current() and getValue() == value end, function()
+                if entry.disabled or not current() then return end
                 setValue(value)
-                refresh()
+                if current() then refresh() end
             end)
             option:SetEnabled(not entry.disabled)
             if entry.tooltip then
@@ -272,6 +280,8 @@ end
 
 function UI.CreateBuilder(window, cfg, context)
     local profile, content, generation = GUF.db, window.content, window.buildGeneration
+    local layout = profile.general.frameStyle
+    local lease = UI.PageLease(window, content)
     local rowParent = content
     local unitPage = window.page == "units"
     local flatGroups = true
@@ -390,22 +400,17 @@ function UI.CreateBuilder(window, cfg, context)
         return target[key]
     end
     local function change(keys, value, keepControls)
-        if GUF.db ~= profile or window.content ~= content or window.buildGeneration ~= generation then return end
+        if not UI.IsCurrent(lease) then return end
+        if unitPage and (not GUF.Settings.Applicable(keys, layout, window.unit)
+            or not GUF.Settings.ValidateEdit(keys, value)) then return end
         local target, key = getPath(cfg, keys)
         target[key] = value
         if context and context.Write then context.Write(keys, value) end
-        GUF.RequestApply()
+        GUF.RequestApply(nil, { unit = unitPage and window.unit or nil,
+            scope = window.page == "hideBlizzard" and "visibility" or nil, keys = GUF.Copy(keys) })
         if GUF.UpdateOptionsPreview then GUF.UpdateOptionsPreview() end
-        if unitPage and window.tab == "auras" and keys[1] == "auras"
-            and (keys[#keys] == "enabled" or keys[#keys] == "anchorOn" or keys[#keys] == "anchorMode") then
-            GUF.BuildOptions()
-        elseif unitPage and window.tab == "bars" and keys[1] == "healthColor" then
-            GUF.BuildOptions()
-        elseif unitPage and window.tab == "text" and keys[1] == "nameColor" then
-            GUF.BuildOptions()
-        elseif unitPage and window.tab == "text" and keys[1] == "text" and keys[3] == "fields" and #keys == 4 and not keepControls then
-            GUF.BuildOptions()
-        end
+        if unitPage and GUF.Settings.RebuildControls(keys, window.tab, keepControls) then GUF.BuildOptions() end
+        return true
     end
     local function check(label, ...)
         local keys, host = { ... }, row(label, unitPage and window.tab == "auras" and 28 or nil)
@@ -475,9 +480,7 @@ function UI.CreateBuilder(window, cfg, context)
             control:SetValue(text)
             restore()
         end
-        field:SetScript("OnEnterPressed", function(self) commit(self); self:ClearFocus() end)
-        field:SetScript("OnEditFocusLost", commit)
-        field:SetScript("OnEscapePressed", function(self) restore(); self:SetScript("OnEditFocusLost", nil); self:ClearFocus(); self:SetScript("OnEditFocusLost", commit) end)
+        UI.BindEditCallbacks(field, lease, commit, restore)
         control:SetScript("OnMouseWheel", function(self, delta) self:SetValue(self:GetValue() + delta * step) end)
         control:EnableMouseWheel(true)
         UI.SkinSlider(control)
@@ -486,10 +489,11 @@ function UI.CreateBuilder(window, cfg, context)
         control:Show()
         return host, control
     end
+    local setting
     local function combatFader()
-        check("Enable combat fade", "fading", "enabled")
-        slider("Combat opacity", 0, 1, .01, true, "fading", "combat")
-        slider("Inactive opacity", 0, 1, .01, true, "fading", "inactive")
+        setting("fading.enabled")
+        setting("fading.combat")
+        setting("fading.inactive")
         -- Trim only this section's trailing blank space before Copy settings.
         y = y + 4
     end
@@ -523,7 +527,7 @@ function UI.CreateBuilder(window, cfg, context)
         control:SetText(initialText)
         local function commit(self)
             local value = self:GetText()
-            if value == initialText then self:ClearFocus(); return end
+            if value == initialText then return end
             if minimum then
                 value = tonumber(value)
                 if not value or value ~= value or value < minimum or value > maximum then
@@ -538,12 +542,9 @@ function UI.CreateBuilder(window, cfg, context)
             end
             change(keys, value)
             initialText = tostring(value)
-            self:SetText(initialText)
-            self:ClearFocus()
+            if UI.IsCurrent(lease) then self:SetText(initialText) end
         end
-        control:SetScript("OnEnterPressed", commit)
-        control:SetScript("OnEditFocusLost", commit)
-        control:SetScript("OnEscapePressed", function(self) self:SetText(initialText); self:ClearFocus() end)
+        UI.BindEditCallbacks(control, lease, commit, function(self) self:SetText(initialText) end)
         if not unitPage then control:ClearAllPoints(); control:SetPoint("LEFT", controlOffset, 0); control:SetWidth(360) end
         UI.SettingHelp(control, label, keys)
     end
@@ -569,9 +570,7 @@ function UI.CreateBuilder(window, cfg, context)
             change(keys, value)
             original = value
         end
-        control:SetScript("OnEnterPressed", function(self) commit(self); self:ClearFocus() end)
-        control:SetScript("OnEditFocusLost", commit)
-        control:SetScript("OnEscapePressed", function(self) self:SetText(original); self:ClearFocus() end)
+        UI.BindEditCallbacks(control, lease, commit, function(self) self:SetText(original) end)
         UI.SettingHelp(control, label, keys)
         control:Show()
         return host, control
@@ -613,15 +612,22 @@ function UI.CreateBuilder(window, cfg, context)
         refresh()
         control:SetScript("OnClick", function()
             local previous = GUF.Copy(read(keys))
+            local picker = {}
+            control.goodUnitFramesColorPicker = picker
+            local function current()
+                return UI.IsCurrent(lease) and control:IsShown() and control.goodUnitFramesColorPicker == picker
+            end
             ColorPickerFrame:SetupColorPickerAndShow({ r = previous[1], g = previous[2], b = previous[3],
                 hasOpacity = false,
                 swatchFunc = function()
+                    if not current() then return end
                     change(keys, { ColorPickerFrame:GetColorRGB() })
-                    refresh()
+                    if current() then refresh() end
                 end,
                 cancelFunc = function()
+                    if not current() then return end
                     change(keys, previous)
-                    refresh()
+                    if current() then refresh() end
                 end,
             })
         end)
@@ -681,8 +687,26 @@ function UI.CreateBuilder(window, cfg, context)
             control:Show()
         end
     end
+    setting = function(id)
+        local definition = GUF.Settings.controls[id]
+        if not definition then error("Unknown setting control: " .. tostring(id)) end
+        local keys = definition.path
+        if unitPage and not GUF.Settings.Applicable(keys, layout, window.unit) then return end
+        local kind, label = definition.control, definition.label
+        if kind == "Check" then return check(label, unpack(keys)) end
+        if kind == "Select" or kind == "Font" then
+            return selectValue(label, kind == "Font" and UI.FontChoices or definition.choices, unpack(keys))
+        end
+        if kind == "ColorSwatch" then return colorSwatch(label, unpack(keys)) end
+        if kind == "Slider" then return slider(label, definition.minimum, definition.maximum,
+            definition.step, definition.percent, unpack(keys)) end
+    end
     return {
-        Read = read, Change = change,
+        Read = read, Change = change, Setting = setting,
+        IsCurrent = function() return UI.IsCurrent(lease) end,
+        BindEdit = function(field, commit, restore) UI.BindEditCallbacks(field, lease, commit, restore) end,
+        Default = function(keys) return GUF.Settings.Default(layout, window.unit, keys) end,
+        Reset = function(keys) return change(keys, GUF.Settings.Default(layout, window.unit, keys)) end,
         BeginFixedHeader = beginFixedHeader, EndFixedHeader = endFixedHeader,
         RowCount = function() return count end,
         Row = row, Check = check, Slider = slider, CombatFader = combatFader,
@@ -697,6 +721,8 @@ function UI.CreateBuilder(window, cfg, context)
             UI.SkinTree(window.content)
             if content.fixedHeader and content.fixedHeader:IsShown() then UI.SkinTree(content.fixedHeader) end
             window.buildingOptions = nil
+            UI.BindControlTree(content, lease)
+            if content.fixedHeader then UI.BindControlTree(content.fixedHeader, lease) end
             UI.UpdateScroll(window)
             UI.QueueScrollUpdate(window)
         end,

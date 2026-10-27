@@ -82,6 +82,7 @@ function UI.CompactSlider(builder, column, label, keys, minimum, maximum, step, 
     slider:SetValueStep(step)
     slider:SetObeyStepOnDrag(true)
     local function onValueChanged(_, value)
+        if not builder.IsCurrent() then return end
         local rounded = math.floor(value / step + .5) * step
         field:SetText(display(rounded))
         if math.abs(builder.Read(keys) - rounded) > step / 10 then builder.Change(keys, rounded) end
@@ -90,6 +91,7 @@ function UI.CompactSlider(builder, column, label, keys, minimum, maximum, step, 
     slider:SetScript("OnValueChanged", onValueChanged)
     slider:SetScript("OnMouseWheel", function(self, delta) self:SetValue(self:GetValue() + delta * step) end)
     local function restore()
+        if not builder.IsCurrent() then return end
         refresh(builder.Read(keys))
         slider:SetScript("OnValueChanged", onValueChanged)
     end
@@ -106,9 +108,7 @@ function UI.CompactSlider(builder, column, label, keys, minimum, maximum, step, 
         builder.Change(keys, value)
         restore()
     end
-    field:SetScript("OnEnterPressed", function(self) commit(self); self:ClearFocus() end)
-    field:SetScript("OnEditFocusLost", commit)
-    field:SetScript("OnEscapePressed", function(self) restore(); self:ClearFocus() end)
+    builder.BindEdit(field, commit, restore)
     -- Native Edit Mode updates reuse this control without rebuilding the page
     -- or leaving an old profile/unit callback attached to a cached column.
     column.refreshSetting = function()

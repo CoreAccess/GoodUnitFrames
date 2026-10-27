@@ -7,26 +7,24 @@ local castOutlines = { { "", "None" }, { "OUTLINE", "Outline" },
 
 local function prediction(builder, key, label, description)
     builder.Group()
-    local showLabel = key == "incAbsorb" and "Show damage shields" or "Show " .. label:lower()
-    local host, check = builder.Check(showLabel, "bars", key, "enabled")
+    local host, check = builder.Setting(key .. ".enabled")
     if description then
         UI.Tooltip(host, label, description)
         UI.Tooltip(check, label, description)
     end
     if key == "incAbsorb" then
-        local fullHost, fullCheck = builder.Check("Show at Full Health", "bars", key, "showAtFullHealth")
+        local fullHost, fullCheck = builder.Setting("incAbsorb.showAtFullHealth")
         local explanation = "Below full health, shields fill the empty space after current health. Enable this to also show an overlay at full health; otherwise shields are hidden at full health. Shields always stay within the health bar."
         UI.Tooltip(fullHost, "Show at Full Health", explanation)
         UI.Tooltip(fullCheck, "Show at Full Health", explanation)
     end
-    local appearanceLabel = key == "incHeal" and "Heal" or "Absorb"
-    local opacityHost, opacitySlider = builder.Slider(appearanceLabel .. " opacity", 0, 1, .01, true, "bars", key, "opacity")
+    local opacityHost, opacitySlider = builder.Setting(key .. ".opacity")
     if key == "healAbsorb" then
         local explanation = "Lower opacity blends the healing absorb with the health bar and any overlapping damage shield. Use 100% for a distinct color."
         UI.Tooltip(opacityHost, "Healing absorb opacity", explanation)
         UI.Tooltip(opacitySlider, "Healing absorb opacity", explanation)
     end
-    builder.ColorSwatch(appearanceLabel .. " color", "bars", key, "color")
+    builder.Setting(key .. ".color")
 end
 
 UI.RegisterPage("bars", "Bars", function(builder, unit, window)
@@ -47,11 +45,11 @@ UI.RegisterPage("bars", "Bars", function(builder, unit, window)
         if builder.Read({ "healthColor" }) == "static" then builder.Color("Static health color", "customHealth") end
         builder.Select("Health texture", UI.TextureChoices, "bars", "healthTexture")
     elseif category == "cast" then
-        local defaults = GUF.GetLayoutDefaults(GUF.db.general.frameStyle).frames[unit].bars.cast
+        local defaults = builder.Default({ "bars", "cast" })
         builder.Group()
-        builder.Check("Enable cast bar", "bars", "cast", "enabled")
-        builder.Select("Cast icon", { { "LEFT", "Left" }, { "RIGHT", "Right" }, { "HIDE", "Disabled" } }, "bars", "cast", "icon")
-        builder.Select("Cast font", UI.FontChoices, "bars", "cast", "font")
+        builder.Setting("cast.enabled")
+        builder.Setting("cast.icon")
+        builder.Setting("cast.font")
         builder.Group("Cast bar position")
         local columns = UI.CompactColumns(builder, "castPositionAnchors", 66, 2)
         for i, spec in ipairs({ { "Anchor point", "point", "The point on the cast bar that attaches to the unit frame." },
@@ -66,8 +64,8 @@ UI.RegisterPage("bars", "Bars", function(builder, unit, window)
             column.dropdown:SetPoint("TOPLEFT", 0, -22); column.dropdown:SetPoint("TOPRIGHT", 0, -22)
             UI.Tooltip(column.dropdown, spec[1], spec[3])
         end
-        builder.Slider("X Offset", -150, 150, 1, false, "bars", "cast", "position", "x")
-        builder.Slider("Y Offset", -150, 150, 1, false, "bars", "cast", "position", "y")
+        builder.Setting("cast.position.x")
+        builder.Setting("cast.position.y")
         local positionRow = builder.Row("")
         positionRow.castPositionReset = positionRow.castPositionReset or UI.Button(positionRow, "Reset position", 170)
         positionRow.castPositionReset:ClearAllPoints(); positionRow.castPositionReset:SetPoint("RIGHT", -5, 0)
@@ -77,8 +75,8 @@ UI.RegisterPage("bars", "Bars", function(builder, unit, window)
         end)
         positionRow.castPositionReset:Show()
         builder.Group("Cast bar size")
-        builder.Slider("Cast bar width", 100, 250, 1, false, "bars", "cast", "width")
-        builder.Slider("Cast bar height", 10, 30, 1, false, "bars", "cast", "height")
+        builder.Setting("cast.width")
+        builder.Setting("cast.height")
         local sizeRow = builder.Row("")
         sizeRow.castSizeReset = sizeRow.castSizeReset or UI.Button(sizeRow, "Reset size", 170)
         sizeRow.castSizeReset:ClearAllPoints(); sizeRow.castSizeReset:SetPoint("RIGHT", -5, 0)
