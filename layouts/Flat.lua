@@ -1,47 +1,9 @@
 local _, GUF = ...
 
--- Independent first-use settings. Existing profiles and other layout snapshots
--- are never reseeded when this definition becomes available.
-local defaults = { frames = GUF.Copy(GUF.defaults.frames), threat = GUF.Copy(GUF.defaults.threat),
-    hideBlizzard = GUF.Copy(GUF.defaults.hideBlizzard) }
-defaults.threat.enabled = false
-defaults.hideBlizzard.cast = false
-for _, unit in ipairs(GUF.order) do
-    local cfg = defaults.frames[unit]
-    cfg.flat = { portrait = unit == "player" and "LEFT" or "RIGHT", backgroundAlpha = .35 }
-    cfg.scale, cfg.fontSize, cfg.nameSize = 1, 12, 12
-    cfg.bars.width, cfg.bars.healthSize.height, cfg.bars.powerSize.height = 280, 34, 18
-    cfg.bars.healthTexture, cfg.bars.powerTexture = "Flat", "Flat"
-    cfg.position = { enabled = true, point = "CENTER", anchorTo = "UIParent", relativePoint = "CENTER",
-        x = unit == "player" and -320 or 320, y = -140 }
-    cfg.bars.cast.enabled, cfg.bars.cast.height, cfg.bars.cast.icon = true, 14, "HIDE"
-    cfg.bars.cast.texture = "Flat"
-    cfg.bars.cast.position = { point = "TOPLEFT", relativePoint = "BOTTOMLEFT", x = 0, y = 0 }
-    cfg.text.name.align, cfg.text.name.x, cfg.text.name.y = "LEFT", 0, 0
-    for _, kind in ipairs({ "health", "power" }) do
-        local text = cfg.text[kind]
-        text.fieldLayout, text.nativeStyle, text.custom = true, false, true
-        text.fields = {}
-        for _, side in ipairs({ "left", "center", "right" }) do
-            local expression = side == "right" and "[current] / [maximum]"
-                or side == "left" and kind == "power" and "[level] [percent]" or ""
-            local field = GUF.DefaultTextField(kind, side, expression)
-            field.enabled, field.width = true, side == "right" and .52 or .48
-            text.fields[side] = field
-        end
-    end
-    for _, kind in ipairs({ "buffs", "debuffs" }) do
-        local aura = cfg.auras[kind][1]
-        aura.enabled, aura.size, aura.perRow, aura.maxRows = true, 22, 10, 2
-        aura.anchorPoint, aura.growV = kind == "buffs" and "TOPLEFT" or "BOTTOMLEFT", kind == "buffs" and "TOP" or "BOTTOM"
-        aura.x, aura.y = 0, kind == "buffs" and 6 or -6
-    end
-end
-
 GUF.Layouts.Register({
     id = "flat", title = "Flat", order = 30,
     description = "Clean rectangular bars with optional square portraits and integrated resources and casting.",
-    units = { player = true, target = true }, defaults = defaults, allowSize = false,
+    units = { player = true, target = true }, defaults = GUF.factoryLayoutDefaults.flat, allowSize = false,
     scale = { minimum = .75, maximum = 1.5, step = .01, nativeSetting = false },
     capabilities = function(unit)
         local private = GUF.Client.GetPrivateAuraAPI()

@@ -2,7 +2,7 @@
 ## Title: Good Unit Frames
 ## Notes: Customize Blizzard unit frames for Warcraft Forever and World of Warcraft Retail.
 ## Author: Druid Whims
-## Version: 1.1.0
+## Version: 1.1.1
 ## SavedVariables: GoodUnitFramesProfiles
 ## Category: Unit Frames
 
