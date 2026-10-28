@@ -1,6 +1,96 @@
 local _, GUF = ...
 local UI = GUF.OptionsUI
 local specimens = {}
+local flatTraceLimit = 18
+
+-- Bounded evidence from owned preview wrappers only, captured during existing
+-- renders/placement passes. Never inspect live unit or native aura geometry.
+local function traceNumber(value)
+    return not GUF.Secret(value) and type(value) == "number" and value == value and math.abs(value) ~= math.huge
+end
+
+local function traceRect(region)
+    if not region then return "absent" end
+    local left, bottom, width, height = region:GetLeft(), region:GetBottom(), region:GetWidth(), region:GetHeight()
+    local scale, alpha, level = region:GetEffectiveScale(), region:GetAlpha(), region:GetFrameLevel()
+    if not traceNumber(left) or not traceNumber(bottom) or not traceNumber(width) or not traceNumber(height)
+        or not traceNumber(scale) or not traceNumber(alpha) or not traceNumber(level) then return "unavailable" end
+    local shown = region:IsShown()
+    return string.format("xy=%.3f,%.3f wh=%.3f,%.3f scale=%.6f alpha=%.3f level=%d shown=%s",
+        left, bottom, width, height, scale, alpha, level, GUF.Secret(shown) and "unknown" or shown and "yes" or "no")
+end
+
+local function traceFlatPreview(window, entry, phase)
+    if not entry or entry.specimenStyle ~= "flat" then return end
+    local rail = window.preview
+    if not rail.traceRecording then return end
+    if rail.traceEntry ~= entry then rail.traceEntry, rail.flatTrace, rail.traceSerial = entry, {}, 0 end
+    local lines = { string.format("#%d %s tab=%s health=%s held=%s status=%s", rail.traceSerial + 1, phase,
+        window.tab or "-", tostring(window.sampleHealth or 55), IsMouseButtonDown("LeftButton") and "yes" or "no",
+        entry.presentationStatus or "-") }
+    local function add(label, region) lines[#lines + 1] = label .. ": " .. traceRect(region) end
+    add("options", window); add("panel", rail.section); add("viewport", rail.viewport)
+    add("root", entry.frame)
+    local state = entry.specimenState
+    add("view", state.view); add("health", entry.health); add("power", entry.power)
+    add("name host", state.nameHost)
+    add("health text", state.textAreas.health); add("power text", state.textAreas.power)
+    add("pvp", state.badges.pvp)
+    add("combat", state.badges.combat); add("resting", state.badges.resting)
+    add("cast", entry.castBar); add("resources", entry.comboRow)
+    for _, kind in ipairs({ "buffs", "debuffs" }) do
+        for i = 1, GUF.auraFrameCount do
+            local host = entry.auraSamples and entry.auraSamples[kind .. i]
+            if host and host.previewUsed then
+                add(kind .. i, host.frame); add(kind .. i .. " anchor", host.anchor)
+            end
+        end
+    end
+    local geometry = table.concat(lines, "\n", 2)
+    if phase == "frame sample" and geometry == rail.lastTraceFrame then return end
+    rail.lastTraceFrame = geometry
+    rail.traceSerial = rail.traceSerial + 1
+    rail.flatTrace[#rail.flatTrace + 1] = table.concat(lines, "\n")
+    if #rail.flatTrace > flatTraceLimit then table.remove(rail.flatTrace, 1) end
+end
+
+-- Called only during an explicitly armed capture, from Core's existing
+-- frame driver. Changes between render callbacks must be observable too.
+function GUF.TickFlatPreviewTrace()
+    local window, entry = GUF.options, GUF.optionsPreviewEntry
+    local rail = window and window.preview
+    if not rail or not rail.traceRecording then GUF.flatPreviewTraceActive = nil; return end
+    if GetTime() >= rail.traceStopAt then
+        rail.traceRecording, rail.tracePending = nil, nil
+        rail.traceStopReason, GUF.flatPreviewTraceActive = "timeout", nil
+        return
+    end
+    rail.traceFrames = rail.traceFrames + 1
+    traceFlatPreview(window, entry, "frame sample")
+end
+
+function GUF.ShowFlatPreviewReport()
+    local window, entry = GUF.options, GUF.optionsPreviewEntry
+    if not window or not window:IsShown() or not entry or entry.specimenStyle ~= "flat"
+        or not window.preview.section:IsShown() then GUF.Print("Open the Flat interactive preview first."); return end
+    if GUF.Restricted() or GUF.editing then GUF.Print("Leave combat and Edit Mode before capturing preview layout."); return end
+    local rail = window.preview
+    if not rail.traceReady then
+        rail.traceEntry, rail.flatTrace, rail.traceSerial = entry, {}, 0
+        rail.traceReady, rail.traceRecording, rail.traceStopAt = true, true, GetTime() + 60
+        rail.traceFrames, rail.lastTraceFrame, rail.traceStopReason = 0, nil, nil
+        GUF.flatPreviewTraceActive = true
+        traceFlatPreview(window, entry, "capture started")
+        GUF.Print("Flat preview capture started. Move a jittering slider, then run /guf previewdebug again to copy the report.")
+        return
+    end
+    traceFlatPreview(window, entry, "manual snapshot")
+    rail.traceReady, rail.traceRecording, rail.tracePending = nil, nil, nil
+    GUF.flatPreviewTraceActive = nil
+    GUF.ShowDiagnosticReport("Flat preview layout", "Flat preview trace v2; unit=" .. entry.unit
+        .. "; sampled frames=" .. (rail.traceFrames or 0) .. "; stop=" .. (rail.traceStopReason or "manual")
+        .. "\n" .. table.concat(rail.flatTrace, "\n\n"))
+end
 local sampleHealthGap = 24
 local _, playerClass = UnitClass("player")
 local canFeignDeath = not GUF.Secret(playerClass) and playerClass == "HUNTER"
@@ -115,14 +205,39 @@ local function positionPreview(window, entry)
     local frame, rail = entry.frame, window.preview
     local viewport, panel = rail.viewport, rail.section
     if entry.presentationStatus ~= "applied" or not panel:IsShown() or panel.moving or window.moving then return false end
+    -- Slider values still render immediately, but fitting their changing
+    -- bounds must not move the slider under a held cursor or recenter the
+    -- specimen against the component being positioned. Fit once on release.
+    local flat = entry.specimenStyle == "flat"
+    if flat and entry.previewPlaced and IsMouseButtonDown("LeftButton") then
+        rail.fitDeferred = entry
+        frame:Show()
+        traceFlatPreview(window, entry, "fit held")
+        return true
+    end
     -- Match the configured UIParent scale even when the options window is scaled.
     local requested = GUF.PresentationFrameSettings(entry).scale * UIParent:GetEffectiveScale() / viewport:GetEffectiveScale()
-    frame:SetScale(requested)
-    local bounds = GUF.Presentation.Bounds(entry)
+    if math.abs(frame:GetScale() - requested) > .00001 then frame:SetScale(requested) end
+    -- Fitting changes the viewport. Reuse Flat's completed sample footprint
+    -- during that follow-up, rather than letting the resize change its own
+    -- measurement inputs and alternate between two window sizes.
+    local bounds = flat and entry.previewFitBounds or nil
+    if not bounds then
+        bounds = GUF.Presentation.Bounds(entry)
+        if flat then entry.previewFitBounds = bounds end
+    end
     local minimumX, maximumX, minimumY, maximumY = bounds.left, bounds.right, bounds.bottom, bounds.top
     local width, height = maximumX - minimumX, maximumY - minimumY
-    local desiredWidth = math.max(360, math.ceil(width * requested + 48))
-    local desiredHeight = math.max(180, math.ceil(height * requested + 80))
+    local panelScale = panel:GetEffectiveScale()
+    -- Flat has many exact integer extents. A tiny layout rounding difference
+    -- must not make ceil alternate the window height by one unit. Fit on the
+    -- physical pixel grid, with tolerance only for floating-point noise.
+    local function fitExtent(value)
+        if flat then return math.floor(value * panelScale + .5 + .001) / panelScale end
+        return math.ceil(value)
+    end
+    local desiredWidth = math.max(360, fitExtent(width * requested + 48))
+    local desiredHeight = math.max(180, fitExtent(height * requested + 80))
     local screenScale = UIParent:GetEffectiveScale() / panel:GetEffectiveScale()
     local screenWidth, screenHeight = UIParent:GetWidth() * screenScale, UIParent:GetHeight() * screenScale
     local left, top
@@ -156,15 +271,32 @@ local function positionPreview(window, entry)
     -- viewport at the screen edge, never change the specimen's actual scale.
     local panelWidth = math.max(96, math.min(desiredWidth, screenWidth - left - 16))
     local panelHeight = math.max(96, math.min(desiredHeight, top - 16))
+    if flat then panelWidth, panelHeight = fitExtent(panelWidth), fitExtent(panelHeight) end
     if math.abs(panel:GetWidth() - panelWidth) > .01 or math.abs(panel:GetHeight() - panelHeight) > .01 then
         panel:SetSize(panelWidth, panelHeight)
     end
     local previewWidth, previewHeight = panelWidth - 24, panelHeight - 56
-    frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", viewport, "TOPLEFT",
-        (previewWidth - width * requested) / (2 * requested) - minimumX,
-        -(previewHeight - height * requested) / (2 * requested) - maximumY)
+    local x = (previewWidth - width * requested) / (2 * requested) - minimumX
+    local y = -(previewHeight - height * requested) / (2 * requested) - maximumY
+    if flat then
+        local viewportLeft, viewportTop = viewport:GetLeft(), viewport:GetTop()
+        if not viewportLeft or not viewportTop then return false end
+        local viewportScale, frameScale = viewport:GetEffectiveScale(), frame:GetEffectiveScale()
+        local originX, originY = viewportLeft * viewportScale, viewportTop * viewportScale
+        x = (math.floor(originX + x * frameScale + .5 + .001) - originX) / frameScale
+        y = (math.floor(originY + y * frameScale + .5 + .001) - originY) / frameScale
+    end
+    local placed = entry.previewAnchor
+    if not flat or not placed or placed.parent ~= viewport
+        or math.abs(placed.x - x) > .001 or math.abs(placed.y - y) > .001 then
+        frame:ClearAllPoints()
+        frame:SetPoint("TOPLEFT", viewport, "TOPLEFT", x, y)
+        if flat then entry.previewAnchor = { parent = viewport, x = x, y = y } end
+    end
+    entry.previewPlaced = true
+    if rail.fitDeferred == entry then rail.fitDeferred = nil end
     frame:Show()
+    traceFlatPreview(window, entry, "fit applied")
     return true
 end
 
@@ -211,7 +343,9 @@ local function renderPreview(window)
     options.prediction = window.tab == "bars" and window.barCategory or nil
     options.combatText = combatTextSelected(window, entry)
     local cfg = options.settings.frames[unit]
+    entry.previewFitBounds = nil
     entry.frame:SetScale(cfg.scale * UIParent:GetEffectiveScale() / rail.viewport:GetEffectiveScale())
+    traceFlatPreview(window, entry, "before render")
     if GUF.RenderFrameSpecimen(entry, nil, options) ~= "applied" then
         rail.positionPending = nil
         rail.presentationAttempts = (rail.presentationAttempts or 0) + 1
@@ -222,8 +356,10 @@ local function renderPreview(window)
     rail.BindWindowDrag(entry.frame)
     refreshConditions(window)
     rail.positionPending = entry
+    traceFlatPreview(window, entry, "after render")
     -- Center in this refresh; continuous slider updates must not postpone it.
     if not positionPreview(window, entry) then entry.frame:Hide() end
+    if style == "flat" and rail.traceRecording then rail.tracePending = entry end
 end
 
 local function render(window)
@@ -258,13 +394,17 @@ end
 function GUF.EnableOptionsIndicatorPreview(unit, category)
     if category == "combat" or category == "resting" then
         enablePreviewCondition(unit, "states", "sampleState", category)
+    elseif category == "loot" and GUF.db.general.frameStyle == "flat" then
+        enablePreviewCondition(unit, "groups", "sampleGroup", "raid")
+        if unit == "target" then enablePreviewCondition(unit, "subjects", "sampleSubject", "player") end
     end
 end
 
-function GUF.UpdateOptionsPreviewBounds(entry)
+function GUF.UpdateOptionsPreviewBounds(entry, positionOnly)
     local window = GUF.options
     if entry and entry.presentationStatus == "applied" and window and window.preview
         and window.page == "units" and entry == GUF.optionsPreviewEntry then
+        if not positionOnly then entry.previewFitBounds = nil end
         window.preview.positionPending = entry
     end
 end
@@ -300,6 +440,9 @@ function UI.CreateOptionsPreview(window)
     panel:SetSize(360, 180); panel:SetPoint("TOPLEFT", window, "TOPRIGHT", 8, 0)
     panel:SetFrameStrata("FULLSCREEN_DIALOG"); panel:SetToplevel(true)
     panel:SetMovable(true); panel:EnableMouse(true)
+    -- positionPreview owns screen-edge fitting; native clamping is used only
+    -- while dragging, so the two positioning systems cannot fight on resize.
+    panel:SetClampedToScreen(false)
     UI.WindowShell(panel, true)
     rail.reopen = UI.Button(rail, "Show Interactive Preview", UI.layout.previewWidth - 28, function()
         if window:IsShown() and window.page == "units" then panel:Show() end
@@ -350,8 +493,14 @@ function UI.CreateOptionsPreview(window)
     rail.BindWindowDrag = bindWindowDrag
     panel:SetScript("OnHide", function()
         stopDragging()
+        if rail.traceRecording then
+            traceFlatPreview(window, GUF.optionsPreviewEntry, "preview hidden")
+            rail.traceStopReason = "preview hidden"
+        end
         if GUF.optionsPreviewEntry then GUF.optionsPreviewEntry.frame:Hide() end
-        rail.positionPending = nil
+        rail.positionPending, rail.fitDeferred, rail.tracePending = nil, nil, nil
+        rail.traceRecording = nil
+        GUF.flatPreviewTraceActive = nil
         rail.reopen:SetShown(window:IsShown() and window.page == "units")
     end)
     panel:SetScript("OnShow", function()
@@ -413,6 +562,20 @@ function UI.CreateOptionsPreview(window)
     refreshConditions(window)
     local elapsed = 0
     rail:SetScript("OnUpdate", function(_, delta)
+        if rail.tracePending then
+            local entry = rail.tracePending
+            rail.tracePending = nil
+            if entry == GUF.optionsPreviewEntry then traceFlatPreview(window, entry, "next frame") end
+        end
+        if rail.fitDeferred and not IsMouseButtonDown("LeftButton") then
+            local entry = rail.fitDeferred
+            rail.fitDeferred = nil
+            if entry == GUF.optionsPreviewEntry then
+                -- A final queued slider value renders/fits below. Otherwise
+                -- position the most recent completed sample exactly once.
+                rail.positionPending = not rail.dirty and entry or nil
+            end
+        end
         -- Settle the previous layout before rendering the next slider value.
         -- Neither placement nor its follow-up can be starved by dirty refreshes.
         if rail.positionPending then
@@ -438,5 +601,5 @@ function UI.CreateOptionsPreview(window)
         if window.page ~= "units" or not rail.section:IsShown() then return end
         if elapsed >= .1 then elapsed = 0; if GUF.optionsPreviewEntry then GUF.TickSpecimenAuras(GUF.optionsPreviewEntry) end end
     end)
-    rail.viewport:SetScript("OnSizeChanged", function() GUF.UpdateOptionsPreviewBounds(GUF.optionsPreviewEntry) end)
+    rail.viewport:SetScript("OnSizeChanged", function() GUF.UpdateOptionsPreviewBounds(GUF.optionsPreviewEntry, true) end)
 end

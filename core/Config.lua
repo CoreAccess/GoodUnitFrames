@@ -3,7 +3,7 @@ local addonName, GUF = ...
 _G.GoodUnitFrames = GUF
 GUF.name = addonName
 GUF.title = "Good Unit Frames"
-GUF.version = "0.2.0"
+GUF.version = "1.1.0"
 -- Transitional aliases keep existing features on the extracted client rules.
 GUF.clientInterface = GUF.Client.interface
 GUF.isForever = GUF.Client.isForever

@@ -197,7 +197,7 @@ local function normalizeExisting(database, style)
     GUF.NormalizeNameText(frames)
     GUF.NormalizeThreatText(frames, database.threat, style)
     GUF.NormalizeRankText(frames)
-    GUF.NormalizeDesignSettings(frames)
+    GUF.NormalizeDesignSettings(frames, style)
     GUF.NormalizeFrameScales(frames, style)
     GUF.NormalizeTextEditors(frames)
     GUF.NormalizeAuraOptions(frames)
@@ -276,7 +276,7 @@ function Settings.PrepareLayout(database, style, sourceVersion)
     GUF.NormalizeThreatText(database.frames, database.threat, style)
     GUF.NormalizeRankText(database.frames)
     GUF.NormalizeFrameScales(database.frames, style)
-    GUF.NormalizeDesignSettings(database.frames)
+    GUF.NormalizeDesignSettings(database.frames, style)
     GUF.NormalizeTextEditors(database.frames)
     GUF.NormalizeAuraOptions(database.frames)
     for _, unit in ipairs(GUF.order) do
@@ -340,6 +340,7 @@ function Settings.PrepareLayout(database, style, sourceVersion)
         cfg.hide.portrait, cfg.hide.name, cfg.hide.border = nil, nil, nil
         cfg.fading.duration, cfg.fading.mouseover, cfg.fading.delay = nil, nil, nil
     end
+    if style == "flat" then GUF.NormalizeFlatSettings(database.frames) end
     database.version = math.max(version, GUF.defaults.version)
     return database
 end

@@ -43,3 +43,21 @@ function Client.ResolveDruidSummonFrame()
     if Client.IsSecret(class) or class ~= "DRUID" then return end
     return TotemFrame
 end
+
+-- Resolve the public assignment across enum-based Retail and legacy clients.
+-- Restricted or unavailable group state simply supplies no cosmetic badge.
+function Client.MasterLooterUnit()
+    local getMethod = C_PartyInfo and C_PartyInfo.GetLootMethod or GetLootMethod
+    if not getMethod then return end
+    local method, party, raid = getMethod()
+    if Client.IsSecret(method) then return end
+    local masterMethod = Enum and Enum.LootMethod and Enum.LootMethod.Masterlooter
+    local master = method == "master" or masterMethod ~= nil and method == masterMethod
+    if not master then return end
+    if not Client.IsSecret(raid) and type(raid) == "number" and raid > 0 and raid <= 40 and raid % 1 == 0 then
+        return "raid" .. raid
+    end
+    if not Client.IsSecret(party) and type(party) == "number" and party >= 0 and party <= 4 and party % 1 == 0 then
+        return party == 0 and "player" or "party" .. party
+    end
+end

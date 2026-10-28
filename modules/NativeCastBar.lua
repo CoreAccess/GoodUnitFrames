@@ -94,7 +94,12 @@ local function fontInfo(source)
 end
 
 function GUF.CastBarDimensions(unit)
-    local cfg, entry = GUF.Runtime.Settings("cast", unit).frames[unit].bars.cast, GUF.frames[unit]
+    local settings = GUF.Runtime.Settings("cast", unit)
+    local cfg, entry = settings.frames[unit].bars.cast, GUF.frames[unit]
+    if settings.general.frameStyle == "flat" then
+        local g = GUF.FlatGeometry(settings.frames[unit])
+        return g.barWidth, cfg.height
+    end
     local native = entry and GUF.NativeCastBar(entry)
     local state = entry and entry.nativeCastStyle
     local width, height
@@ -140,7 +145,12 @@ function GUF.LayoutCastLabels(entry, bar, name, time, source)
     font = GUF.Font(cfg.font)
     local width = bar:GetWidth()
     if not number(width) or width <= 0 then return end
-    time:ClearAllPoints(); time:SetPoint(cfg.time.point, bar, cfg.time.point, cfg.time.x, cfg.time.y)
+    local labelHost = bar
+    if GUF.Runtime.Settings("cast", entry).general.frameStyle == "flat" and bar.labelHost then
+        labelHost = bar.labelHost
+        width = width - (cfg.icon ~= "HIDE" and cfg.height + 3 or 0)
+    end
+    time:ClearAllPoints(); time:SetPoint(cfg.time.point, labelHost, cfg.time.point, cfg.time.x, cfg.time.y)
     labelFont(time, font, math.max(6, size + cfg.time.size), cfg.time.outline or flags)
     time:SetJustifyH(cfg.time.point)
     -- The timer's natural text edge also bounds opposite-side spell names.
@@ -148,12 +158,13 @@ function GUF.LayoutCastLabels(entry, bar, name, time, source)
     time:SetWidth(0); time:SetShown(cfg.time.enabled)
     name:SetWordWrap(false); time:SetWordWrap(false)
     name:SetNonSpaceWrap(false); name:SetMaxLines(1)
-    -- Align against the actual bar, not the space remaining beside the timer.
+    -- Flat reserves the icon cell; other layouts use the complete bar.
+    -- Align within that text area, independently of the timer's current width.
     -- Opposite edge anchors bound long names at the timer; other combinations
     -- retain the bar-wide limit without moving the selected name anchor.
     local inset = cfg.name.point == "LEFT" and 4 or cfg.name.point == "RIGHT" and -4 or 0
     name:ClearAllPoints()
-    name:SetPoint(cfg.name.point, bar, cfg.name.point, inset + cfg.name.x, cfg.name.y)
+    name:SetPoint(cfg.name.point, labelHost, cfg.name.point, inset + cfg.name.x, cfg.name.y)
     if cfg.time.enabled and cfg.name.point == "LEFT" and cfg.time.point == "RIGHT" then
         name:SetWidth(0)
         name:SetPoint("RIGHT", time, "LEFT", -4, cfg.name.y - cfg.time.y)

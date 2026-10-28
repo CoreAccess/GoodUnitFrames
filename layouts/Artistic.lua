@@ -20,6 +20,8 @@ GUF.Layouts.Register({
     end,
     presentation = {
         nativeBarColors = false,
+        syncBar = function(entry, kind) return GUF.SyncArtisticRenderedBar(entry, kind) end,
+        suppressBars = function(entry) return GUF.SuppressArtisticNativeBars(entry) end,
         dimensions = function(unit, config) return GUF.ArtisticDimensions(unit, config) end,
         createSample = function(unit, parent) return GUF.CreateArtisticSpecimen(unit, parent) end,
         renderSample = function(entry, scenario, context) return GUF.RenderArtisticSample(entry, scenario, context) end,

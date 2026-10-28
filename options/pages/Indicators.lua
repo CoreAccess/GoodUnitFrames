@@ -18,9 +18,10 @@ end
 local function placement(builder, kind)
     builder.Group()
     enabled(builder, kind)
-    local artistic = GUF.db.general.frameStyle == "artistic"
+    local flat = GUF.db.general.frameStyle == "flat"
+    local artistic = GUF.db.general.frameStyle == "artistic" or flat
     local integratedCombo = artistic and kind == "resource" and GUF.UsesSegmentedResources(GUF.options.unit)
-    local positioned = GUF.IsPortraitIndicator(kind)
+    local positioned = GUF.IsPortraitIndicator(kind) or flat and kind == "combat"
     if artistic and positioned then
         builder.Group("Position")
         local columns = UI.CompactColumns(builder, "indicatorPositionAnchors", 66, 2)
@@ -44,7 +45,9 @@ local function placement(builder, kind)
         columns[1].dropdown:ClearAllPoints()
         columns[1].dropdown:SetPoint("TOPLEFT", 0, -22); columns[1].dropdown:SetPoint("TOPRIGHT", 0, -22)
         UI.CompactSlider(builder, columns[2], "Size (0 = default)", { "indicators", kind, "size" }, 0, 64, 1)
-        builder.Select("Anchor relative to", { { "frame", "Whole frame" }, { "portrait", "Portrait" }, { "bars", "Health / Power" } }, "indicators", kind, "anchor")
+        if not flat then
+            builder.Select("Anchor relative to", { { "frame", "Whole frame" }, { "portrait", "Portrait" }, { "bars", "Health / Power" } }, "indicators", kind, "anchor")
+        end
     end
     if not integratedCombo then
         if positioned then
@@ -68,7 +71,7 @@ end
 
 UI.RegisterPage("indicators", "Indicators", function(builder, unit, window)
     local kind = window.indicatorCategory
-    if kind == "combat" or kind == "resting" then return end
+    if (kind == "combat" or kind == "resting") and not UI.LayoutCapabilities(unit).flat then return end
     if kind == "threat" then UI.BuildThreat(builder); return end
     if kind == "feedback" then
         builder.Group()

@@ -201,7 +201,7 @@ function GUF.ApplyPreviewCastAuraLayout(entry, pool, auras, force)
             local cfg, host = auras[kind][i], pool[kind .. i]
             local width, height = sampleSize(host)
             if cfg.enabled and kind ~= childKind and width then
-                local group = makeGroup(entry, kind .. i, cfg, host.frame, width, height)
+                local group = makeGroup(entry, kind .. i, cfg, host.proxyAnchored and host.anchor or host.frame, width, height)
                 if group then
                     if kind == parentKind and auras[childKind][i].anchorMode ~= "SEQUENTIAL" then
                         width, height = sampleSize(pool[childKind .. i])

@@ -54,6 +54,10 @@ end
 
 -- Optional feature operations run in the owning layout. Absence is explicit;
 -- a feature must not substitute another layout's housing or private state.
+function GUF.SyncRenderedBar(entry, kind)
+    return Presentation.Feature(entry, "syncBar", kind)
+end
+
 function Presentation.Feature(entry, operation, ...)
     local context = Presentation.ForEntry(entry)
     local callback = context.definition.presentation[operation]

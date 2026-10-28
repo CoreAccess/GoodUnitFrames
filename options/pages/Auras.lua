@@ -124,7 +124,7 @@ UI.RegisterPage("auras", "Auras", function(builder, unit, window)
             sliders("rows", { { "Per row", "perRow", 1, 20 }, { "Max rows", "maxRows", 1, 10 } })
             sliders("offsets", { { "X Offset", "x", -1000, 1000 }, { "Y Offset", "y", -1000, 1000 } })
             builder.Group("Appearance")
-            if unit == "target" then
+            if unit == "target" and not UI.LayoutCapabilities(unit).flat then
                 local _, stockControl = builder.Check("Replace stock aura display", "auras", "replaceDefault")
                 UI.Tooltip(stockControl, "Replace stock aura display", "Suppresses Blizzard's target auras when at least one Buffs frame and one Debuffs frame are enabled and working. Player buffs and debuffs are controlled separately under Hide Blizzard.")
             end

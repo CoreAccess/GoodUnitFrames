@@ -47,22 +47,28 @@ UI.RegisterPage("bars", "Bars", function(builder, unit, window)
     elseif category == "cast" then
         local defaults = builder.Default({ "bars", "cast" })
         builder.Group()
+        local flat = UI.LayoutCapabilities(unit).flat
         builder.Setting("cast.enabled")
-        builder.Setting("cast.icon")
+        if flat then
+            builder.Select("Spell icon", { { "HIDE", "Hidden" }, { "LEFT", "Left" }, { "RIGHT", "Right" } }, "bars", "cast", "icon")
+            builder.Select("Cast texture", UI.TextureChoices, "bars", "cast", "texture")
+        else builder.Setting("cast.icon") end
         builder.Setting("cast.font")
         builder.Group("Cast bar position")
-        local columns = UI.CompactColumns(builder, "castPositionAnchors", 66, 2)
-        for i, spec in ipairs({ { "Anchor point", "point", "The point on the cast bar that attaches to the unit frame." },
-            { "Relative point", "relativePoint", "The point on the unit frame where the selected cast bar anchor attaches." } }) do
-            local column, key = columns[i], spec[2]
-            column.caption:ClearAllPoints(); column.caption:SetPoint("TOP")
-            column.caption:SetJustifyH("CENTER"); column.caption:SetText(spec[1])
-            column.dropdown = UI.Dropdown(column, UI.pointChoices,
-                function() return builder.Read({ "bars", "cast", "position", key }) end,
-                function(value) builder.Change({ "bars", "cast", "position", key }, value) end, column.dropdown)
-            column.dropdown:ClearAllPoints()
-            column.dropdown:SetPoint("TOPLEFT", 0, -22); column.dropdown:SetPoint("TOPRIGHT", 0, -22)
-            UI.Tooltip(column.dropdown, spec[1], spec[3])
+        if not flat then
+            local columns = UI.CompactColumns(builder, "castPositionAnchors", 66, 2)
+            for i, spec in ipairs({ { "Anchor point", "point", "The point on the cast bar that attaches to the unit frame." },
+                { "Relative point", "relativePoint", "The point on the unit frame where the selected cast bar anchor attaches." } }) do
+                local column, key = columns[i], spec[2]
+                column.caption:ClearAllPoints(); column.caption:SetPoint("TOP")
+                column.caption:SetJustifyH("CENTER"); column.caption:SetText(spec[1])
+                column.dropdown = UI.Dropdown(column, UI.pointChoices,
+                    function() return builder.Read({ "bars", "cast", "position", key }) end,
+                    function(value) builder.Change({ "bars", "cast", "position", key }, value) end, column.dropdown)
+                column.dropdown:ClearAllPoints()
+                column.dropdown:SetPoint("TOPLEFT", 0, -22); column.dropdown:SetPoint("TOPRIGHT", 0, -22)
+                UI.Tooltip(column.dropdown, spec[1], spec[3])
+            end
         end
         builder.Setting("cast.position.x")
         builder.Setting("cast.position.y")
@@ -75,13 +81,13 @@ UI.RegisterPage("bars", "Bars", function(builder, unit, window)
         end)
         positionRow.castPositionReset:Show()
         builder.Group("Cast bar size")
-        builder.Setting("cast.width")
+        if not flat then builder.Setting("cast.width") end
         builder.Setting("cast.height")
         local sizeRow = builder.Row("")
         sizeRow.castSizeReset = sizeRow.castSizeReset or UI.Button(sizeRow, "Reset size", 170)
         sizeRow.castSizeReset:ClearAllPoints(); sizeRow.castSizeReset:SetPoint("RIGHT", -5, 0)
         sizeRow.castSizeReset:SetScript("OnClick", function()
-            builder.Change({ "bars", "cast", "width" }, defaults.width)
+            if not flat then builder.Change({ "bars", "cast", "width" }, defaults.width) end
             builder.Change({ "bars", "cast", "height" }, defaults.height)
             GUF.BuildOptions()
         end)

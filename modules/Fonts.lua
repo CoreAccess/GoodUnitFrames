@@ -299,4 +299,5 @@ function GUF.ApplyText(entry)
             GUF.UpdateBarText(entry, kind)
         end
     end
+    GUF.Presentation.Feature(entry, "refreshText")
 end

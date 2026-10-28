@@ -87,7 +87,9 @@ function GUF.BuildOptions(unit, page)
     if window.tab == "design" and not UI.LayoutCapabilities(window.unit).design then window.tab = "frame" end
     GUF.SyncOptionsPreviewSubject(window)
     if unit then window.unitsExpanded = true end
-    if window.auraKind == "bossDebuffs" and window.unit ~= "player" then window.auraKind = "buffs" end
+    if window.auraKind == "bossDebuffs" and (window.unit ~= "player" or not UI.LayoutCapabilities(window.unit).bossAuras) then
+        window.auraKind = "buffs"
+    end
     local preview = window.page == "units"
     window.preview:SetShown(preview)
     if not preview then

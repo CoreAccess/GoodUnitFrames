@@ -12,6 +12,9 @@ local function refreshUnits()
     end
     GUF.UpdateThreat()
     GUF.UpdateArtisticStates()
+    for _, entry in pairs(GUF.frames) do
+        if entry.flatLayout and entry.flatLayout.active then GUF.UpdateFlatState(entry) end
+    end
 end
 
 events:RegisterEvent("ADDON_LOADED")
@@ -62,6 +65,7 @@ events:SetScript("OnEvent", function(_, event, arg1)
         events:SetScript("OnUpdate", function(_, delta)
             GUF.FlushQueuedUpdates()
             GUF.UpdateFading(delta)
+            if GUF.flatPreviewTraceActive then GUF.TickFlatPreviewTrace() end
             elapsed = elapsed + delta
             if elapsed < .25 then return end
             elapsed = 0
@@ -76,6 +80,9 @@ events:SetScript("OnEvent", function(_, event, arg1)
             GUF.UpdateAuraEnchants()
             GUF.UpdateThreat()
             GUF.UpdateArtisticStates()
+            for _, entry in pairs(GUF.frames) do
+                if entry.flatLayout and entry.flatLayout.active then GUF.UpdateFlatState(entry) end
+            end
             if GUF.options and GUF.options:IsShown() then GUF.UpdateConfigurationButton() end
         end)
         SLASH_GUF1 = "/guf"
@@ -100,7 +107,9 @@ events:SetScript("OnEvent", function(_, event, arg1)
             elseif command == "resourcesdebug" then GUF.ShowResourceReport()
             elseif command == "layoutdebug" then GUF.ShowLayoutReport()
             elseif command == "updatedebug" then GUF.ShowUpdateReport()
-            elseif command == "previewdebug" then GUF.ShowBlizzardPreviewReport()
+            elseif command == "previewdebug" then
+                if GUF.db.general.frameStyle == "flat" then GUF.ShowFlatPreviewReport()
+                else GUF.ShowBlizzardPreviewReport() end
             elseif command == "" or GUF.IsManagedUnit(command) then GUF.OpenOptions(GUF.IsManagedUnit(command) and command or nil)
             else GUF.Print("/guf [player|target|unlock|lock|reset|status|targetdebug|portraitdebug|dividerdebug|resourcesdebug|layoutdebug|updatedebug|previewdebug]") end
         end
@@ -141,6 +150,9 @@ events:SetScript("OnEvent", function(_, event, arg1)
     elseif event:find("^UNIT_") and arg1 and not GUF.IsManagedUnit(arg1) then
         if arg1 == "vehicle" and (event == "UNIT_POWER_UPDATE" or event == "UNIT_POWER_FREQUENT" or event == "UNIT_MAXPOWER") then
             GUF.UpdateArtisticStates()
+            for _, entry in pairs(GUF.frames) do
+                if entry.flatLayout and entry.flatLayout.active then GUF.UpdateFlatState(entry) end
+            end
             return
         end
         -- Pet/party/raid evidence may change Target's combat color. Refresh

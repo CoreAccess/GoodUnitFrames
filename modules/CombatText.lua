@@ -91,7 +91,7 @@ local function styleFeedback(entry, frame)
     frame:SetScale(style.scale)
     frame:ClearAllPoints()
     -- Anchor to the health bar; keep offsets consistent when the text scale changes.
-    frame:SetPoint("CENTER", entry.health or entry.frame, settings.point, settings.x / style.scale, settings.y / style.scale)
+    frame:SetPoint("CENTER", GUF.Presentation.Role(entry, "health") or entry.health or entry.frame, settings.point, settings.x / style.scale, settings.y / style.scale)
 end
 
 local function startPreviewFeedback(frame)

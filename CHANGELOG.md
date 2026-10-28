@@ -1,8 +1,12 @@
 # Changelog
 
+## 1.1.0
+
+- Added new flat layout and a few more bug fixes
+
 ## 1.0.1
 
-- Bug and Stability Fixes
+- Bug and Stability Fixes 
 
 ## 1.0.0
 

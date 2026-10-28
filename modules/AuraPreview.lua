@@ -118,6 +118,10 @@ function GUF.TickSpecimenAuras(entry)
             for i = 1, host.count do updateTimer(host.buttons[i], GetTime()) end
         end
     end
+    -- Flat's public sample geometry and cast/resource state only change when
+    -- rendered. RefreshAuraPreview already applies clearance in that pass;
+    -- ticking countdowns must not keep repositioning a settled preview.
+    if entry.specimenStyle == "flat" then return end
     if entry.castAuraPreviewSettings and GUF.ApplyPreviewCastAuraLayout(entry, entry.auraSamples, entry.castAuraPreviewSettings, false)
         and GUF.UpdateOptionsPreviewBounds then GUF.UpdateOptionsPreviewBounds(entry) end
 end
@@ -187,11 +191,24 @@ local function renderFlow(key, entry, cfg, items)
     host.frame:ClearAllPoints()
     local point, relative = GUF.AuraAnchor(cfg)
     local x, y = GUF.AuraPosition(entry, cfg)
-    host.frame:SetPoint(point, entry.optionsPreview and cfg.anchorPoint == "FREE" and entry.frame or GUF.AuraParent(entry, cfg), relative, x, y)
-    -- Live linked containers attach to a one-icon proxy at the first icon,
-    -- not the far edge of the complete multi-row capacity/sample rectangle.
-    host.anchor:ClearAllPoints(); host.anchor:SetPoint(point, host.frame, point, 0, 0)
+    local parent = entry.optionsPreview and cfg.anchorPoint == "FREE" and entry.frame or GUF.AuraParent(entry, cfg)
+    host.proxyAnchored = GUF.Runtime.Settings("auras", entry).general.frameStyle == "flat"
+    host.anchor:ClearAllPoints()
     host.anchor:SetSize(cfg.size, cfg.size)
+    if host.proxyAnchored then
+        -- Match live: position the first-icon proxy, then attach the flow to
+        -- it. Cast avoidance and linked rows must move that same proxy.
+        host.anchor:SetParent(host.frame:GetParent())
+        host.anchor:SetScale(scale / parentScale)
+        host.anchor:SetPoint(point, parent, relative, x, y)
+        host.frame:SetPoint(point, host.anchor, point, 0, 0)
+    else
+        host.anchor:SetParent(host.frame)
+        host.anchor:SetScale(1)
+        host.frame:SetPoint(point, parent, relative, x, y)
+        host.anchor:SetPoint(point, host.frame, point, 0, 0)
+    end
+    host.anchor:Show()
     host.frame:Show()
     return host
 end
@@ -272,12 +289,20 @@ function GUF.RefreshAuraPreview(specimen)
                 local point = GUF.AuraAnchor(cfg)
                 local relative = cfg.growV == "TOP" and point:gsub("BOTTOM", "TOP") or point:gsub("TOP", "BOTTOM")
                 child.frame:ClearAllPoints()
-                child.frame:SetPoint(point, parent.anchor, relative, 0, cfg.growV == "TOP" and cfg.spacing or -cfg.spacing)
+                if child.proxyAnchored then
+                    child.anchor:ClearAllPoints()
+                    child.anchor:SetPoint(point, parent.anchor, relative, 0, cfg.growV == "TOP" and cfg.spacing or -cfg.spacing)
+                    child.frame:SetPoint(point, child.anchor, point, 0, 0)
+                else
+                    child.frame:SetPoint(point, parent.anchor, relative, 0, cfg.growV == "TOP" and cfg.spacing or -cfg.spacing)
+                end
             end
         end
     end
     if entry.unit == "player" then renderBoss(entry, auras.bossDebuffs) end
-    for _, host in pairs(pool) do if not host.previewUsed then host.frame:Hide() end end
+    for _, host in pairs(pool) do
+        if not host.previewUsed then host.frame:Hide(); host.anchor:Hide() end
+    end
     GUF.ApplyPreviewCastAuraLayout(entry, pool, auras, true)
     if entry.optionsPreview then entry.castAuraPreviewSettings = auras end
     if not entry.optionsPreview then GUF.SyncAuraPreviewVisibility() end
@@ -293,7 +318,7 @@ function GUF.SetConfigurationAuraPreview(enabled, unit)
         GUF.auraPreviewUnit, GUF.auraPreviewStarted = nil, nil
         driver:Hide()
         for _, host in pairs(hosts) do
-            host.frame:Hide()
+            host.frame:Hide(); host.anchor:Hide()
         end
         GUF.SyncAuraPreviewVisibility()
     end

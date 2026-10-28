@@ -45,7 +45,7 @@ function GUF.UpdateBarText(entry, kind)
     local bar, cfg = entry[kind], GUF.Runtime.Settings("text", entry).frames[entry.unit]
     local owned = entry[kind .. "Text"]
     if not bar or not owned then return end
-    GUF.SyncArtisticRenderedBar(entry, kind)
+    GUF.SyncRenderedBar(entry, kind)
     local anchor = GUF.Presentation.Role(entry, kind .. "Anchor") or bar
     local options = cfg.text[kind]
     if entry[kind .. "Slots"] then for _, text in pairs(entry[kind .. "Slots"]) do text:Hide() end end

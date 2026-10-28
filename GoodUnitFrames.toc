@@ -2,7 +2,7 @@
 ## Title: Good Unit Frames
 ## Notes: Customize Blizzard unit frames for Warcraft Forever and World of Warcraft Retail.
 ## Author: Druid Whims
-## Version: 1.0.1
+## Version: 1.1.0
 ## SavedVariables: GoodUnitFramesProfiles
 ## Category: Unit Frames
 
@@ -24,6 +24,7 @@ core\Updates.lua
 core\PresentationContext.lua
 layouts\Blizzard.lua
 layouts\Artistic.lua
+layouts\Flat.lua
 core\Profiles.lua
 core\LayoutProfiles.lua
 core\Settings.lua
@@ -82,6 +83,7 @@ modules\Specimens.lua
 layouts\ArtisticPresentation.lua
 layouts\ArtisticFeatures.lua
 layouts\BlizzardPresentation.lua
+layouts\FlatPresentation.lua
 modules\Threat.lua
 options\Controls.lua
 options\ControlLifecycle.lua

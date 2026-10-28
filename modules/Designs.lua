@@ -114,7 +114,7 @@ function GUF.SelectedPortraitDesign(unit, liveUnit, sampleIdentity)
     return source, source and "selected" or "class-design-unavailable"
 end
 
-function GUF.NormalizeDesignSettings(frames)
+function GUF.NormalizeDesignSettings(frames, style)
     for unit, cfg in pairs(type(frames) == "table" and frames or {}) do
         if type(cfg) == "table" then
             if type(cfg.design) ~= "table" then cfg.design = {} end
@@ -160,14 +160,17 @@ function GUF.NormalizeDesignSettings(frames)
             layered.enabled, layered.level = true, nil
             if type(layered.angles) ~= "table" then layered.angles = {} end
             layered.angles.level = nil
-            -- Combat/resting are automatic presentation now, not adjustable
-            -- badges. Keep neutral internal records for compact/native consumers.
+            -- Flat exposes adjustable Combat / Resting badges. Preserve their
+            -- full saved records and enablement in active and inactive layouts;
+            -- other layouts retain their automatic presentation rules.
             for _, kind in ipairs({ "combat", "resting" }) do
                 layered.angles[kind] = nil
-                if type(cfg.hide) == "table" then cfg.hide[kind] = nil end
-                if type(cfg.indicators) == "table" then
-                    cfg.indicators[kind] = { scale = 1, x = 0, y = 0, alpha = 1,
-                        point = "DEFAULT", anchor = "frame", size = 0 }
+                if style ~= "flat" then
+                    if type(cfg.hide) == "table" then cfg.hide[kind] = nil end
+                    if type(cfg.indicators) == "table" then
+                        cfg.indicators[kind] = { scale = 1, x = 0, y = 0, alpha = 1,
+                            point = "DEFAULT", anchor = "frame", size = 0 }
+                    end
                 end
             end
             -- Automatic native overlays ignore retired badge preferences.

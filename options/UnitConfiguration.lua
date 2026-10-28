@@ -29,6 +29,13 @@ function UI.UnitContext(window)
                 if key == "size" then return GUF.PortraitIndicatorSize(unit, keys[2]) end
                 if key == "point" and (root[key] == nil or root[key] == "DEFAULT") then return "CENTER" end
             end
+            if #keys == 3 and keys[1] == "indicators" and GUF.db.general.frameStyle == "flat" then
+                if key == "size" then return root[key] > 0 and root[key] or 18 end
+                if key == "point" and root[key] == "DEFAULT" then return GUF.flatIndicatorPoints[keys[2]] or "CENTER" end
+                if key == "anchorPoint" and not root[key] then
+                    return root.point ~= "DEFAULT" and root.point or GUF.flatIndicatorPoints[keys[2]] or "CENTER"
+                end
+            end
             if #keys == 1 and key == "nameSize" then return GUF.db.frames[unit].text.name.size end
             -- The control's 1-4 scale maps to the renderer's 0.5-2 multiplier.
             if #keys == 3 and keys[1] == "indicators" and keys[2] == "feedback" and key == "scale" then return root[key] * 2 end
@@ -36,11 +43,11 @@ function UI.UnitContext(window)
                 local width, height = GUF.CastBarDimensions(unit)
                 return key == "width" and width or height
             end
-            if #keys == 2 and keys[1] == "bars" and key == "width" then
+            if #keys == 2 and keys[1] == "bars" and key == "width" and GUF.db.general.frameStyle ~= "flat" then
                 local width = GUF.ArtisticBarSize(unit, "health")
                 return width
             end
-            if #keys == 3 and keys[1] == "bars" and key == "height" and (keys[2] == "healthSize" or keys[2] == "powerSize") then
+            if #keys == 3 and keys[1] == "bars" and key == "height" and GUF.db.general.frameStyle ~= "flat" and (keys[2] == "healthSize" or keys[2] == "powerSize") then
                 local _, height = GUF.ArtisticBarSize(unit, keys[2] == "healthSize" and "health" or "power")
                 return height
             end
@@ -74,18 +81,18 @@ function UI.UnitContext(window)
                 value = math.max(minimum, math.min(maximum, value))
             end
             if #keys == 1 and (keys[1] == "width" or keys[1] == "height") and not GUF.CanResizeFrames() then return end
-            if #keys == 2 and keys[1] == "bars" and keys[2] == "width" then
+            if #keys == 2 and keys[1] == "bars" and keys[2] == "width" and GUF.db.general.frameStyle ~= "flat" then
                 if GUF.db.general.frameStyle ~= "artistic" or (unit ~= "player" and unit ~= "target") then return end
                 local minimum, maximum = GUF.ArtisticBarLimits(unit, "health")
                 value = math.max(minimum, math.min(maximum, value))
             end
-            if #keys == 3 and keys[1] == "bars" and keys[3] == "height" and (keys[2] == "healthSize" or keys[2] == "powerSize") then
+            if #keys == 3 and keys[1] == "bars" and keys[3] == "height" and GUF.db.general.frameStyle ~= "flat" and (keys[2] == "healthSize" or keys[2] == "powerSize") then
                 if GUF.db.general.frameStyle ~= "artistic" or (unit ~= "player" and unit ~= "target") then return end
                 local kind = keys[2] == "healthSize" and "health" or "power"
                 local _, _, minimum, maximum = GUF.ArtisticBarLimits(unit, kind)
                 value = math.max(minimum, math.min(maximum, value))
             end
-            local barHeight = #keys == 3 and ((keys[1] == "artistic" and keys[2] == "playerGeometry" and keys[3] == "header")
+            local barHeight = GUF.db.general.frameStyle == "artistic" and #keys == 3 and ((keys[1] == "artistic" and keys[2] == "playerGeometry" and keys[3] == "header")
                 or (keys[1] == "bars" and keys[3] == "height" and (keys[2] == "healthSize" or keys[2] == "powerSize")))
             -- Capture the effective width before the height changes the fitted
             -- portrait diameter. The stored bars.width may predate that fit.

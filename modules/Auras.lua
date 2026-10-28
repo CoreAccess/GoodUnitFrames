@@ -581,9 +581,14 @@ function GUF.ApplyAuras(selectedUnits)
         elseif entry then
             local ok, displayed = pcall(configureUnit, entry)
             if not ok then GUF.auraError = "native-aura-configuration" end
-            local cfg = GUF.Runtime.Settings("auras", unit).frames[unit]
+            local settings = GUF.Runtime.Settings("auras", unit)
+            local cfg = settings.frames[unit]
             if unit == "target" then
-                GUF.nativeAuraDesired[unit] = ok and displayed and cfg.auras.replaceDefault
+                -- Flat owns the target's aura presentation, including disabled
+                -- custom groups. Keep its dormant stock-display preference so
+                -- existing snapshots survive; failed setup restores native auras.
+                GUF.nativeAuraDesired[unit] = ok and (settings.general.frameStyle == "flat"
+                    or displayed and cfg.auras.replaceDefault)
             end
         else
             for _, kind in ipairs({ "buffs", "debuffs" }) do

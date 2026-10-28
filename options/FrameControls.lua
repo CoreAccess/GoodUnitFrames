@@ -30,7 +30,15 @@ function GUF.RefreshOptionsFrameScale(unit)
 end
 
 function UI.BuildBarSize(builder, unit, kind)
-    if not UI.LayoutCapabilities(unit).artwork then return end
+    local capabilities = UI.LayoutCapabilities(unit)
+    if not capabilities.barGeometry then return end
+    if capabilities.flat then
+        local columns = UI.CompactColumns(builder, "barDimensions", 70, 2)
+        UI.CompactSlider(builder, columns[1], "Frame width", { "bars", "width" }, 120, 800, 1)
+        UI.CompactSlider(builder, columns[2], "Bar height", { "bars", kind .. "Size", "height" },
+            kind == "health" and 10 or 5, kind == "health" and 160 or 80, 1)
+        return
+    end
     if unit ~= "player" and unit ~= "target" then return end
     local columns = UI.CompactColumns(builder, "barDimensions", 70, 2)
     local minimum, maximum, heightMinimum, heightMaximum = GUF.ArtisticBarLimits(unit, kind)

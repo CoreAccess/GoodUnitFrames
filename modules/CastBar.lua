@@ -15,11 +15,13 @@ end
 
 local function styleFill(bar)
     local atlas = bar.channel and "ui-castingbar-filling-channel" or "ui-castingbar-filling-standard"
-    bar.atlasFill = hasAtlas(atlas)
-    local asset = bar.atlasFill and atlas or "Interface\\TargetingFrame\\UI-StatusBar"
+    bar.atlasFill = not bar.flatStyle and hasAtlas(atlas)
+    local asset = bar.flatStyle and bar.flatTexture
+        or bar.atlasFill and atlas or "Interface\\TargetingFrame\\UI-StatusBar"
     if bar.fillAsset ~= asset then
         bar:SetStatusBarTexture(bar.atlasFill and "Interface\\Buttons\\WHITE8X8" or asset)
-        if bar.atlasFill then bar:GetStatusBarTexture():SetAtlas(atlas) end
+        if bar.atlasFill then bar:GetStatusBarTexture():SetAtlas(atlas)
+        else bar:GetStatusBarTexture():SetTexCoord(0, 1, 0, 1) end
         bar:GetStatusBarTexture():SetDrawLayer("ARTWORK", 0)
         bar.spark:ClearAllPoints()
         bar.spark:SetPoint("CENTER", bar:GetStatusBarTexture(), "RIGHT")
@@ -69,6 +71,7 @@ end
 -- Callers guard protected geometry. Always anchor from saved unit-relative
 -- coordinates, never from the bar's previously offset points.
 function GUF.AnchorCastBar(entry, bar, position)
+    if GUF.Presentation.Feature(entry, "anchorCast", bar) then return end
     position = position or GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast.position
     bar:ClearAllPoints()
     bar:SetPoint(position.point, entry.frame, position.relativePoint, position.x, position.y)
@@ -175,7 +178,8 @@ function GUF.CacheCastAuraGeometry(entry, bar, width, height)
     bar.goodUnitFramesCastIconBounds = nil
     local cfg = GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast
     local icon = GUF.CastIconRegion(entry, bar)
-    if icon and (cfg.icon == "LEFT" or cfg.icon == "RIGHT") then
+    if GUF.Runtime.Settings("cast", entry).general.frameStyle ~= "flat"
+        and icon and (cfg.icon == "LEFT" or cfg.icon == "RIGHT") then
         local iconWidth, iconHeight = icon:GetSize()
         local iconScale = icon:GetEffectiveScale()
         if number(iconWidth) and number(iconHeight) and number(iconScale) and iconWidth > 0 and iconHeight > 0 and iconScale > 0 then
@@ -197,6 +201,10 @@ end
 -- Internal combo/shard rows stay inside their housing. If the configured
 -- owned cast intersects it, move only that cosmetic cast beneath the row.
 function GUF.AdjustTargetComboCast(entry)
+    if GUF.Runtime.Settings("cast", entry).general.frameStyle == "flat" then
+        if entry.castBar then GUF.AnchorFlatCast(entry, entry.castBar) end
+        return
+    end
     if entry.unit ~= "target" and not (entry.unit == "player" and entry.comboRow and entry.comboRow.integrated) then return end
     local bar, row = entry.castBar, entry.comboRow
     if not bar or not bar.goodUnitFramesOwned or bar.nativeCastPresentation then return end
@@ -500,6 +508,9 @@ function GUF.CreateCastBarPresentation(parent)
     bar.spark:Hide()
     bar.icon = bar:CreateTexture(nil, "ARTWORK")
     bar.icon:SetSize(16, 16)
+    bar.labelHost = GUF.Runtime.CreateFrame("Frame", nil, bar)
+    bar.labelHost:EnableMouse(false)
+    bar.labelHost:Hide()
     for _, kind in ipairs({ "name", "time" }) do
         bar[kind] = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         bar[kind]:SetFont(GUF.Font("Default"), 12, "OUTLINE")
@@ -513,7 +524,30 @@ function GUF.StyleCastBarPresentation(bar, state, channel)
     bar.nativeCastPresentation = nil
     bar.artisticStyle = state and state.active or false
     bar.channel = channel
-    bar.border:Show()
+    bar.flatStyle = state and state.flat == true
+    bar.flatTexture = bar.flatStyle and (GUF.MediaTexture(state.texture or "Flat") or "Interface\\Buttons\\WHITE8X8") or nil
+    if bar.flatStyle then
+        bar.background:SetColorTexture(.08, .08, .08, 1)
+        bar.border:SetColorTexture(0, 0, 0, 1)
+        bar.border:ClearAllPoints(); bar.border:SetAllPoints(); bar.border:Hide()
+        bar.castBorderPadding = { x = 0, top = 0, bottom = 0 }
+        -- Keep the progress edge inside the rectangular cast row too.
+        bar.spark:SetColorTexture(1, 1, 1, .8)
+        bar.spark:SetBlendMode("BLEND")
+        bar.spark:SetSize(2, bar.layoutHeight or 16)
+    else
+        bar.border:Show()
+        if hasAtlas("ui-castingbar-pip") then
+            bar.spark:SetTexture(nil, "CLAMP", "CLAMP", "LINEAR")
+            bar.spark:SetAtlas("ui-castingbar-pip")
+            bar.spark:SetBlendMode("BLEND")
+        else
+            bar.spark:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark", "CLAMP", "CLAMP", "LINEAR")
+            bar.spark:SetTexCoord(0, 1, 0, 1)
+            bar.spark:SetBlendMode("ADD")
+        end
+        bar.spark:SetSize(6, 20)
+    end
     styleFill(bar)
     bar:SetStatusBarColor(1, 1, 1)
     local color = bar.atlasFill and untintedColor or channel and channelColor or castColor
@@ -582,13 +616,29 @@ end
 
 function GUF.PositionCastIcon(entry, bar, icon)
     local cfg = GUF.Runtime.Settings("cast", entry).frames[entry.unit].bars.cast
-    local gap = GUF.Runtime.Settings("cast", entry).general.frameStyle == "blizzard" and 4 or 3
+    local style = GUF.Runtime.Settings("cast", entry).general.frameStyle
+    local gap = style == "blizzard" and 4 or 3
     bar.icon:ClearAllPoints()
-    bar.icon:SetPoint(cfg.icon == "RIGHT" and "LEFT" or "RIGHT", bar,
-        cfg.icon == "RIGHT" and "RIGHT" or "LEFT", cfg.icon == "RIGHT" and gap or -gap, 0)
-    if icon then
-        local width, iconHeight = icon:GetSize()
-        if number(width) and number(iconHeight) and width > 0 and iconHeight > 0 then bar.icon:SetSize(width, iconHeight) end
+    if style == "flat" then
+        local point = cfg.icon == "RIGHT" and "RIGHT" or "LEFT"
+        bar.icon:SetPoint(point, bar, point, 0, 0)
+        bar.icon:SetSize(cfg.height, cfg.height)
+        bar.icon:SetDrawLayer("OVERLAY", 2)
+        bar.spark:SetSize(2, cfg.height)
+        local inset = cfg.icon ~= "HIDE" and cfg.height + 3 or 0
+        bar.labelHost:ClearAllPoints()
+        bar.labelHost:SetPoint("TOPLEFT", bar, "TOPLEFT", cfg.icon == "LEFT" and inset or 0, 0)
+        bar.labelHost:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", cfg.icon == "RIGHT" and -inset or 0, 0)
+        bar.labelHost:Show()
+    else
+        if bar.labelHost then bar.labelHost:Hide() end
+        bar.icon:SetDrawLayer("ARTWORK", 0)
+        bar.icon:SetPoint(cfg.icon == "RIGHT" and "LEFT" or "RIGHT", bar,
+            cfg.icon == "RIGHT" and "RIGHT" or "LEFT", cfg.icon == "RIGHT" and gap or -gap, 0)
+        if icon then
+            local width, iconHeight = icon:GetSize()
+            if number(width) and number(iconHeight) and width > 0 and iconHeight > 0 then bar.icon:SetSize(width, iconHeight) end
+        else bar.icon:SetSize(16, 16) end
     end
 end
 
@@ -660,10 +710,11 @@ function GUF.ApplyCastBar(entry)
     bar = bar and bar.created and bar or createCastBar(entry)
     bar.runtimeBinding = GUF.Runtime.Binding("cast", entry)
     bar.managed = true
-    -- Keep the separate Player bar under Hide Blizzard > Cast. Only Target's
-    -- native artwork is replaced here; its controller must retain native alpha
-    -- so a cast that ends during layout handoff can still finish and fade.
-    local status, reason = GUF.SetNativeCastArtworkHidden(entry, native, entry.unit == "target" and root.bars.cast.enabled)
+    -- Artistic retains its separate Player Hide Blizzard preference. Flat
+    -- replaces native Player/Target artwork, preserving controller alpha and
+    -- finish/fade behavior even when the owned cast setting is disabled.
+    local flat = GUF.Runtime.Settings("cast", entry).general.frameStyle == "flat"
+    local status, reason = GUF.SetNativeCastArtworkHidden(entry, native, flat or entry.unit == "target" and root.bars.cast.enabled)
     if status == "deferred" then return status, reason end
     GUF.StyleCastBarPresentation(bar, GUF.Presentation.Role(entry, "castStyle"), bar.channel)
     GUF.PositionCastBar(entry)

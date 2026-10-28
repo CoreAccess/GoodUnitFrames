@@ -3,11 +3,14 @@ local UI = GUF.OptionsUI
 
 function UI.IndicatorCategories(unit)
     local capabilities = UI.LayoutCapabilities(unit)
-    local artistic = capabilities.artwork
+    local artistic = capabilities.artwork or capabilities.flat
     local categories = { { "pvp", "PvP flag" } }
     categories[#categories + 1] = { "leader", "Leader / assistant" }
     if capabilities.roleIndicator then categories[#categories + 1] = { "role", artistic and "Class role" or "Role icon" } end
     if artistic then categories[#categories + 1] = { "loot", "Master loot" } end
+    if capabilities.flat then
+        categories[#categories + 1] = { "combat", "Combat / Resting" }
+    end
     categories[#categories + 1] = { "feedback", "Combat text" }
     if unit == "player" and GUF.SupportsClassResources() and capabilities.classResources then categories[#categories + 1] = { "resource", "Class resources" } end
     if capabilities.threat then categories[#categories + 1] = { "threat", "Threat" } end
@@ -27,6 +30,9 @@ function UI.TextCategories(unit)
 end
 
 function UI.UpdateElementNavigation(window)
+    if window.page == "units" and UI.LayoutCapabilities(window.unit).flat and window.indicatorCategory == "resting" then
+        window.indicatorCategory = "combat"
+    end
     local indicators = window.page == "units" and window.tab == "indicators"
     if not indicators or not window:IsShown() then
         window.indicatorPreviewUnit, window.indicatorPreviewCategory = nil, nil

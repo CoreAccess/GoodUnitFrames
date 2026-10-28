@@ -29,6 +29,7 @@ group({ "bars", "width" }, { "layout", "text", "resources" }, "barGeometry")
 group({ "bars", "healthSize" }, { "layout", "text", "resources" }, "barGeometry")
 group({ "bars", "powerSize" }, { "layout", "text", "resources" }, "barGeometry")
 group({ "bars", "cast" }, { "cast", "auras" })
+group({ "bars", "cast", "texture" }, { "cast" }, "flat")
 for _, key in ipairs({ "incHeal", "incAbsorb", "healAbsorb" }) do
     group({ "bars", key }, { "predictions" })
 end
@@ -57,6 +58,7 @@ group({ "combatText" }, { "text" })
 group({ "indicators", "feedback" }, { "text" })
 group({ "design" }, { "artwork", "layout" }, "design", nil, "retain")
 group({ "artistic" }, { "layout", "artwork" }, "artwork")
+group({ "flat" }, { "layout", "artwork" }, "flat")
 group({ "threat" }, { "threat", "layout" }, "threat", "target", "retain")
 groups[#groups].scope = "layout"
 
@@ -122,6 +124,9 @@ local function control(id, path, label, kind, minimum, maximum, step, percent, c
     Settings.RegisterControl(id, { path = path, label = label, control = kind,
         minimum = minimum, maximum = maximum, step = step, percent = percent, choices = choices })
 end
+control("flat.portrait", { "flat", "portrait" }, "Portrait", "Select", nil, nil, nil, nil,
+    { { "HIDE", "Disabled" }, { "LEFT", "Left" }, { "RIGHT", "Right" } })
+control("flat.backgroundAlpha", { "flat", "backgroundAlpha" }, "Background opacity", "Slider", 0, 1, .01, true)
 control("fading.enabled", { "fading", "enabled" }, "Enable combat fade", "Check")
 control("fading.combat", { "fading", "combat" }, "Combat opacity", "Slider", 0, 1, .01, true)
 control("fading.inactive", { "fading", "inactive" }, "Inactive opacity", "Slider", 0, 1, .01, true)

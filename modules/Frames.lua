@@ -290,8 +290,8 @@ function GUF.UpdateColors(entry)
     local rendered = GUF.Presentation.Role(entry, "ownedBars")
     if cfg.bars.powerMode ~= "blizzard" then entry.inactivePowerTint = nil end
     if rendered then
-        GUF.SyncArtisticRenderedBar(entry, "health")
-        GUF.SyncArtisticRenderedBar(entry, "power")
+        GUF.SyncRenderedBar(entry, "health")
+        GUF.SyncRenderedBar(entry, "power")
     else
         if cfg.healthColor == "blizzard" then tintBlizzardTexture(entry, "health") end
         if cfg.bars.powerMode == "blizzard" then tintBlizzardTexture(entry, "power") end

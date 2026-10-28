@@ -40,9 +40,9 @@ UI.RegisterPage("panel", "General", function(builder, unit, window)
     local introduction = builder.Row("Choose the look of your unit frames, then customize each unit in Unit Configuration.", 40, true)
     introduction.label.goodUnitFramesBodySize = 15
     introduction.label:SetFont(GUF.Font("Default"), 15, "")
-    local host = builder.Row("", 254, true)
-    host.label:Hide(); host.tiles = host.tiles or {}
     local specifications = GUF.Layouts.List()
+    local host = builder.Row("", math.ceil(#specifications / 2) * 254, true)
+    host.label:Hide(); host.tiles = host.tiles or {}
     for _, tile in ipairs(host.tiles) do tile:Hide() end
     for i, item in ipairs(specifications) do
         local key, title, description = item.id, item.title, item.description
@@ -82,12 +82,12 @@ UI.RegisterPage("panel", "General", function(builder, unit, window)
     local function layout()
         if #specifications == 0 then return true end
         if not host:IsVisible() or host:GetWidth() < 210 then return end
-        local width = host:GetWidth() / #specifications
+        local width = host:GetWidth() / 2
         local ready = true
         for i = 1, #specifications do
             local tile = host.tiles[i]
             -- Keep specimen positions and reserve room for larger wrapped captions.
-            tile:ClearAllPoints(); tile:SetPoint("TOPLEFT", (i - 1) * width, 0); tile:SetSize(math.max(70, width - 12), 244)
+            tile:ClearAllPoints(); tile:SetPoint("TOPLEFT", ((i - 1) % 2) * width, -math.floor((i - 1) / 2) * 254); tile:SetSize(math.max(70, width - 12), 244)
             tile.specimens = tile.specimens or {}
             for id, specimen in pairs(tile.specimens) do
                 if id ~= tile.illustrationStyle then specimen.frame:Hide() end

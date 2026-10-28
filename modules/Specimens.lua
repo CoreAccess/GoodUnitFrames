@@ -130,13 +130,17 @@ function GUF.RenderFrameSpecimen(entry, native, options)
         entry, scenario, options.generation)
     entry.presentationContext = context
     entry.presentationConfig, entry.presentationStyle = scenario.config, style
+    entry.presentationStatus, entry.presentationReason = "rendering", nil
     return Presentation.With(context, function()
         Presentation.SampleData(entry, scenario)
         local status, reason = context.definition.presentation.renderSample(entry, scenario, context)
-        entry.presentationStatus, entry.presentationReason = status, reason
-        if status == "unavailable" or status == "deferred" then entry.frame:Hide(); return status, reason end
+        if status == "unavailable" or status == "deferred" then
+            entry.presentationStatus, entry.presentationReason = status, reason
+            entry.frame:Hide(); return status, reason
+        end
         Presentation.StyleSampleBars(entry, scenario)
         Presentation.SampleFeatures(entry, scenario)
+        entry.presentationStatus, entry.presentationReason = "applied", nil
         return "applied"
     end)
 end

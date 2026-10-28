@@ -99,9 +99,9 @@ function GUF.ApplyBars(entry)
                 renderFill.goodUnitFramesOwned = true
                 if texture then
                     renderFill:SetDesaturated(false)
-                    if state.renderTexture ~= texture then
+                    if state.renderTexture ~= texture or state.renderHost ~= render then
                         render.goodUnitFramesFill:SetTexture(texture)
-                        state.renderTexture = texture
+                        state.renderTexture, state.renderHost = texture, render
                     end
                     renderFill:SetTexCoord(0, 1, 0, 1)
                 else
@@ -123,8 +123,8 @@ function GUF.ApplyBars(entry)
             end
             state.writing = nil
             if render then
-                GUF.SuppressArtisticNativeBars(entry)
-                GUF.SyncArtisticRenderedBar(entry, kind)
+                GUF.Presentation.Feature(entry, "suppressBars")
+                GUF.SyncRenderedBar(entry, kind)
             end
         end
     end

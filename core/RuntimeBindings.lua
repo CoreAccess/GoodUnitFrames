@@ -9,6 +9,8 @@ Runtime.Wrap("layout", { "UpdateArtisticState", "UpdateArtisticPortrait", "Updat
     "RestoreArtisticBarGeometry", "RestoreArtisticPlayerNameAnchor", "LayoutArtisticRenderedLayers",
     "LayoutArtisticResources", "UpdateArtisticResources", "UpdateComboPoints", "LayoutTargetComboStack",
     "UpdateAutomaticIndicators", "AnimateRetailResourceRow" })
+Runtime.Wrap("layout", { "UpdateFlatState", "SyncFlatBar", "LayoutFlatResources", "RefreshFlatNativeGeometry" })
+Runtime.Wrap("text", { "RefreshFlatName" })
 Runtime.Wrap("colors", { "UpdateColors" })
 Runtime.Wrap("bars", { "ApplyBars" })
 Runtime.Wrap("text", { "UpdateUnitName", "UpdateBarText", "StyleText", "ApplyText" })
